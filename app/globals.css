@@ -1,0 +1,104 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --color-void: #0c0a14;
+  --color-stone: #2a2438;
+  --color-stone-dark: #1a1523;
+  --color-ember: #ff6b3d;
+  --color-arcane: #6ee7d0;
+  --color-gold: #e8b339;
+  --color-parchment: #ece3cf;
+  --color-blood: #c43d3d;
+}
+
+* {
+  box-sizing: border-box;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+}
+
+html, body {
+  background-color: var(--color-void);
+  color: var(--color-parchment);
+  font-family: var(--font-vt323), monospace;
+  font-size: 20px;
+  line-height: 1.4;
+}
+
+/* Scanline / CRT atmosphere — subtle, fixed, never blocks interaction */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background: repeating-linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.12) 0px,
+    rgba(0, 0, 0, 0.12) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  mix-blend-mode: multiply;
+  opacity: 0.35;
+}
+
+h1, h2, h3, .font-display {
+  font-family: var(--font-press-start), cursive;
+  letter-spacing: 0.5px;
+}
+
+/* Pixel bevel border — fakes a chunky carved-stone edge without sprite art */
+.pixel-bevel {
+  border: 4px solid #000;
+  box-shadow:
+    inset 2px 2px 0 0 rgba(255, 255, 255, 0.08),
+    inset -2px -2px 0 0 rgba(0, 0, 0, 0.5),
+    4px 4px 0 0 #000;
+}
+
+.pixel-bevel-arcane {
+  border: 4px solid var(--color-arcane);
+  box-shadow:
+    inset 2px 2px 0 0 rgba(110, 231, 208, 0.15),
+    4px 4px 0 0 #000;
+}
+
+/* Segmented block bar — used by HealthBar / XPBar instead of a smooth gradient fill */
+.segmented-bar {
+  display: grid;
+  grid-auto-flow: column;
+  gap: 2px;
+  padding: 3px;
+  background: #000;
+  border: 3px solid #000;
+}
+
+.segmented-bar-cell {
+  width: 100%;
+  height: 100%;
+}
+
+/* Custom scrollbar to stay in-theme */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-stone-dark);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-stone);
+  border: 2px solid #000;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
