@@ -10,7 +10,7 @@ An educational RPG where students fight dungeon monsters by answering DSA questi
 
 Owns everything the judge sees and touches. Pages: DungeonMap, Combat, StatSheet, BossFight, Guild, Leaderboard. Components: HealthBar, XPBar, HintToken, MLDashboard. All backend communication goes through a single `api/client.js` file — no component calls `fetch` directly. Builds against mock data from Day 1; real endpoints are a one-line swap per call when P2 publishes them.
 
-**Stack:** React + Vite, React Router
+**Stack:** Next.js 15 App Router, React 19, Tailwind CSS, Zustand
 
 ---
 
