@@ -31,7 +31,7 @@ export default function BossFightPage() {
     hintRevealed,
     enterRoom,
     submitAnswer,
-    useHintLocally,
+    revealHintLocally,
     resetCombat,
     retreat,
   } = useGameStore();
@@ -138,7 +138,7 @@ export default function BossFightPage() {
             tokensRemaining={player.hint_tokens}
             maxTokens={3}
             used={hintRevealed}
-            onUse={() => useHintLocally(spendHintToken)}
+            onUse={() => revealHintLocally(spendHintToken)}
           />
         </div>
       </PixelPanel>

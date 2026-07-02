@@ -1,68 +1,47 @@
-# CodeCrypt — Frontend
+# SkillQuest: AI Dungeon
 
-Next.js 14 (App Router) frontend for **CodeCrypt: The AI Dungeon**. Fully playable right now against
-a built-in mock backend — no FastAPI server required to demo it.
+An educational RPG where students fight dungeon monsters by answering DSA questions. Adaptive difficulty, NLP answer judging, and a live knowledge graph make every run feel different.
 
-## Run it
+---
 
-```bash
-npm install
-cp .env.local.example .env.local
-npm run dev
-```
+## Team Structure
 
-Open http://localhost:3000. Register any username/password (mock mode auto-creates the player).
+### Person 1 — Frontend (The Experience Layer)
 
-## Switching from mock to the real backend
+Owns everything the judge sees and touches. Pages: DungeonMap, Combat, StatSheet, BossFight, Guild, Leaderboard. Components: HealthBar, XPBar, HintToken, MLDashboard. All backend communication goes through a single `api/client.js` file — no component calls `fetch` directly. Builds against mock data from Day 1; real endpoints are a one-line swap per call when P2 publishes them.
 
-Edit `.env.local`:
+**Stack:** Next.js 15 App Router, React 19, Tailwind CSS, Zustand
 
-```env
-NEXT_PUBLIC_API_URL=http://localhost:8000
-NEXT_PUBLIC_USE_MOCK=false
-```
+---
 
-That's it — every API call in the app goes through `lib/api/client.js`, which branches on
-`USE_MOCK`. No component, page, or store talks to `fetch` directly, so nothing else needs to change.
+### Person 2 — Backend (The Glue Layer)
 
-## What's built
+Owns the FastAPI server, SQLite database, all game logic, and the API contracts that govern how the team communicates. Publishes the contract document on Day 1 before anyone else writes a meaningful line of code. Core endpoints: session start, dungeon structure, room entry (calls P3 for difficulty + question), answer submission (calls P3 to judge, writes AccuracyHistory), player stats, guild raid, leaderboard. The AccuracyHistory write on every submission is the single most critical database operation in the project — P3's RL tuner reads it from Day 3 onward.
 
-- **Auth** — register/login/logout pages, session restored via `/auth/me` on load, guarded routes
-  via `lib/useRequireAuth.js`.
-- **DungeonMap** (`/dungeon`) — the 11-topic knowledge graph rendered as a literal level-select map:
-  stone tiles connected by glowing prerequisite lines. Locked/unlocked/weak/mastered styling driven
-  by live accuracy data. Boss room gates open once every topic is unlocked.
-- **Combat** (`/combat/[roomId]`) — free-text answer box, segmented pixel HP bars for player + enemy,
-  floating damage/XP numbers, hint tokens, multi-question fights against one enemy until it's defeated.
-- **BossFight** (`/boss/[dungeonId]`) — same combat loop, bigger HP pool, questions rotate across all
-  topics.
-- **StatSheet** (`/stats`) — per-topic accuracy mapped to RPG stats (see `lib/statMap.js`).
-- **Guild** (`/guild`) — join a raid party, see member topic-lanes and shared boss HP.
-- **Leaderboard** (`/leaderboard`) — polls every 5s, highlights your row.
-- **AI Core dashboard** (`/dashboard`) — the judge-facing panel: live knowledge graph (React Flow,
-  same layout function as the dungeon map on purpose), RL difficulty history and NLP score history
-  charts (Recharts). Polls every 6s.
+**Stack:** FastAPI, SQLAlchemy, SQLite
 
-## Folder structure
+---
+
+### Person 3 — AI/ML (The Intelligence Layer)
+
+Owns four endpoints under `/ai/`. Never touches the database or game logic directly — P2 is the customer, these are vendor services. Deliverables: `POST /ai/question/generate` (LLM prompt with retry and JSON validation), `POST /ai/answer/judge` (sentence-transformer cosine similarity with LLM fallback on borderline scores), `POST /ai/difficulty/next` (threshold-based RL tuner, epsilon-greedy bandit as a Day 5 upgrade), `POST /ai/graph/next-topic` (prerequisite-aware topic routing), and `GET /ai/dashboard/{player_id}` (aggregated judge demo panel). Critical dependency: P2 must confirm AccuracyHistory writes are live by end of Day 2.
+
+**Stack:** FastAPI, google-genai, sentence-transformers (all-MiniLM-L6-v2)
+
+---
+
+## Repo Layout
 
 ```
-app/                  routes (App Router) — one folder per page
-components/           game UI (HealthBar, XPBar, HintToken, MLDashboard, NavBar, DamageNumber)
-components/ui/        pixel design system primitives (Panel, Button, Input, Badge)
-lib/api/client.js      ← the ONLY file that calls fetch
-lib/mock/mockData.js   in-memory mock backend, mirrors the real contract exactly
-lib/config.js          env-driven config (API URL, mock toggle)
-lib/statMap.js          topic ↔ RPG stat names, mirrors backend TOPIC_GRAPH
-lib/graphLayout.js      shared layout math for DungeonMap + MLDashboard's graph
-store/                  Zustand: useAuthStore, useGameStore
+SkillQuest-AI-Dungeon/
+├── frontend/        Person 1
+├── backend/         Person 2
+├── services/        Person 3
+└── README.md
 ```
 
-## Known gaps / questions for the team
+---
 
-- No hint-spend endpoint in the API contract yet — currently client-side only. See TODO comments in
-  `store/useGameStore.js` and `store/useAuthStore.js`.
-- Mock combat invents its own HP/respawn rules (player HP persists across rooms, retreat resets it).
-  These are mock-only conveniences in `lib/mock/mockData.js` — the real backend can implement
-  HP/death however P2 prefers; the frontend only needs `player_hp_after` / `enemy_hp_after` back from
-  `/game/answer/submit`.
-- See `CodeCrypt_Frontend_Spec.md` (shared separately) for the full API contract this was built against.
+## API Contract (published by P2 on Day 1)
+
+All contracts live in `backend/contracts/`. No one builds against an undocumented endpoint.

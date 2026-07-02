@@ -83,7 +83,7 @@ export const useGameStore = create((set, get) => ({
   // contract. This decrements client-side only for now — flag to the team
   // whether hint spend should be server-authoritative (recommended, so
   // tokens can't be refilled by refreshing) and add e.g. POST /game/hint/use.
-  useHintLocally(decrementFn) {
+  revealHintLocally(decrementFn) {
     set({ hintRevealed: true });
     decrementFn?.();
   },

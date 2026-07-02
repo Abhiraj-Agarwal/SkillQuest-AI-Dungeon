@@ -33,7 +33,7 @@ export default function CombatPage() {
     hintRevealed,
     enterRoom,
     submitAnswer,
-    useHintLocally,
+    revealHintLocally,
     resetCombat,
     retreat,
   } = useGameStore();
@@ -130,7 +130,7 @@ export default function CombatPage() {
             tokensRemaining={player.hint_tokens}
             maxTokens={3}
             used={hintRevealed}
-            onUse={() => useHintLocally(spendHintToken)}
+            onUse={() => revealHintLocally(spendHintToken)}
           />
         </div>
       </PixelPanel>

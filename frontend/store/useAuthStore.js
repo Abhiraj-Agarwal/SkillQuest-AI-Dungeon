@@ -55,7 +55,7 @@ export const useAuthStore = create(
         set({ error: null });
       },
 
-      // Client-side optimistic decrement — see TODO in useGameStore.useHintLocally
+      // Client-side optimistic decrement — see TODO in useGameStore.revealHintLocally
       // about adding a server-authoritative hint-spend endpoint.
       spendHintToken() {
         const p = get().player;
