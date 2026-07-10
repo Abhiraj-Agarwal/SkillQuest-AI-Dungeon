@@ -53,7 +53,9 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-Copy `backend/.env.example` to `backend/.env` before enabling real AI. Keep `USE_MOCK_AI=true` for a local run without a Gemini API key. API documentation is available at `http://localhost:8000/docs`.
+Python 3.12 is recommended for the pinned dependency set. Copy `backend/.env.example` to `backend/.env` before enabling real AI. Keep `USE_MOCK_AI=true` for a local run without a Gemini API key. API documentation is available at `http://localhost:8000/docs`.
+
+To run Person 3's service separately, start it on port 8001 using `services/README.md`, set `AI_SERVICE_URL=http://localhost:8001` in `backend/.env`, and keep the game server on port 8000.
 
 ## Core API
 

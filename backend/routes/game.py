@@ -118,6 +118,16 @@ async def start_session(body: SessionStartRequest, db: Session = Depends(get_db)
     if not dungeon:
         raise HTTPException(status_code=404, detail="Dungeon not found")
 
+    existing_topics = {
+        history.topic
+        for history in db.query(AccuracyHistory).filter(
+            AccuracyHistory.player_id == body.player_id
+        ).all()
+    }
+    for room in dungeon.rooms:
+        if room.topic not in existing_topics:
+            db.add(AccuracyHistory(player_id=body.player_id, topic=room.topic))
+
     new_streak, new_last = update_streak(player.last_active, player.streak_days)
     player.streak_days = new_streak
     player.last_active = new_last
@@ -383,7 +393,8 @@ async def use_hint(body: dict, db: Session = Depends(get_db)):
 @router.get("/leaderboard")
 async def get_leaderboard(limit: int = 10, offset: int = 0, db: Session = Depends(get_db)):
     players = db.query(Player).order_by(Player.total_xp.desc()).offset(offset).limit(limit).all()
-    return [{"rank": offset + i + 1, "username": p.username, "level": p.level,
+    return [{"rank": offset + i + 1, "player_id": p.player_id,
+             "username": p.username, "level": p.level,
              "total_xp": p.total_xp, "streak_days": p.streak_days} for i, p in enumerate(players)]
 
 

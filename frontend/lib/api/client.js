@@ -1,86 +1,278 @@
-// THE single file for all backend communication. No component, hook, or
-// store should ever call fetch() directly — that's the rule from the team
-// spec, and it's what makes "swap mock for live" a one-line change here
-// instead of a hunt across every page.
-//
-// Toggle via NEXT_PUBLIC_USE_MOCK in .env.local — see lib/config.js.
+// The single browser-to-backend boundary. Components and stores consume the
+// stable frontend view models below and never depend on FastAPI wire shapes.
 
 import { API_BASE_URL, USE_MOCK } from '../config';
 import * as mock from '../mock/mockData';
+import { TOPIC_GRAPH, TOPIC_LABELS } from '../statMap';
+
+const SESSION_KEY = 'skillquest-api-session';
+
+let live = {
+  playerId: null,
+  sessionId: null,
+  dungeon: null,
+  combat: null,
+};
+
+function hydrateLiveState() {
+  if (typeof window === 'undefined') return;
+  try {
+    live = { ...live, ...JSON.parse(window.localStorage.getItem(SESSION_KEY) || '{}') };
+  } catch {
+    window.localStorage.removeItem(SESSION_KEY);
+  }
+}
+
+function persistLiveState() {
+  if (typeof window !== 'undefined') {
+    window.localStorage.setItem(SESSION_KEY, JSON.stringify(live));
+  }
+}
+
+function clearLiveState() {
+  live = { playerId: null, sessionId: null, dungeon: null, combat: null };
+  if (typeof window !== 'undefined') window.localStorage.removeItem(SESSION_KEY);
+}
+
+hydrateLiveState();
 
 async function request(path, { method = 'GET', body, headers } = {}) {
-  let res;
+  let response;
   try {
-    res = await fetch(`${API_BASE_URL}${path}`, {
+    response = await fetch(`${API_BASE_URL}${path}`, {
       method,
-      credentials: 'include', // sends the httpOnly JWT cookie P2 sets on login
       headers: { 'Content-Type': 'application/json', ...headers },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-  } catch (networkErr) {
-    const err = new Error('Could not reach the backend. Is it running?');
-    err.code = 0;
-    err.cause = networkErr;
-    throw err;
+  } catch (cause) {
+    const error = new Error('Could not reach the backend. Is it running?');
+    error.code = 0;
+    error.cause = cause;
+    throw error;
   }
 
-  const data = await res.json().catch(() => ({}));
-
-  if (!res.ok) {
-    const err = new Error(data?.error || `Request failed (${res.status})`);
-    err.code = data?.code ?? res.status;
-    throw err;
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = Array.isArray(data?.detail)
+      ? data.detail.map((item) => item.msg).join(', ')
+      : data?.detail;
+    const error = new Error(data?.error || detail || `Request failed (${response.status})`);
+    error.code = data?.code ?? response.status;
+    throw error;
   }
   return data;
 }
 
-// ---------------- auth ----------------
+function rememberPlayer(player) {
+  live.playerId = player.player_id;
+  persistLiveState();
+  return { player };
+}
+
+async function currentPlayer() {
+  hydrateLiveState();
+  if (!live.playerId) {
+    const error = new Error('Not authenticated');
+    error.code = 401;
+    throw error;
+  }
+  return request(`/game/player/${live.playerId}`);
+}
+
+function accuracyMap(player) {
+  return Object.fromEntries(
+    (player.accuracy_history || []).map((entry) => [entry.topic, entry.recent_accuracy])
+  );
+}
+
+function normalizeDungeon(dungeon, player) {
+  const accuracies = accuracyMap(player);
+  const rooms = dungeon.rooms.map((room) => {
+    const recentAccuracy = accuracies[room.topic] ?? 0;
+    let status = 'unlocked';
+    if (!room.is_unlocked) status = 'locked';
+    else if (recentAccuracy > 0.8) status = 'mastered';
+    else if (recentAccuracy > 0 && recentAccuracy < 0.5) status = 'weak';
+
+    return {
+      ...room,
+      label: TOPIC_LABELS[room.topic] || room.topic,
+      status,
+      recent_accuracy: recentAccuracy,
+      prerequisites: TOPIC_GRAPH[room.topic] || [],
+    };
+  });
+  const candidates = rooms.filter((room) => room.status !== 'locked' && !room.is_boss);
+  const nextRoom = candidates.sort((a, b) => a.recent_accuracy - b.recent_accuracy)[0];
+
+  return {
+    dungeon_id: dungeon.dungeon_id,
+    name: dungeon.name,
+    domain: dungeon.domain,
+    rooms,
+    next_topic: nextRoom?.topic ?? null,
+    boss_unlocked: rooms.some((room) => room.is_boss && room.is_unlocked),
+  };
+}
+
+async function startDungeonSession(requestedDungeonId) {
+  const player = await currentPlayer();
+  let dungeon;
+  try {
+    dungeon = await request(`/game/dungeon/${requestedDungeonId}`);
+  } catch (error) {
+    if (error.code !== 404) throw error;
+    const available = await request('/game/dungeons');
+    if (!available.length) throw new Error('No dungeon has been seeded.');
+    dungeon = await request(`/game/dungeon/${available[0].dungeon_id}`);
+  }
+
+  const session = await request('/game/session/start', {
+    method: 'POST',
+    body: { player_id: player.player_id, dungeon_id: dungeon.dungeon_id },
+  });
+  live.sessionId = session.session_id;
+  live.dungeon = dungeon;
+  persistLiveState();
+  return normalizeDungeon(dungeon, player);
+}
+
 export const auth = {
   register: (username, password) =>
     USE_MOCK
       ? mock.register(username, password)
-      : request('/auth/register', { method: 'POST', body: { username, password } }),
+      : request('/game/player/create', { method: 'POST', body: { username } }).then(rememberPlayer),
 
   login: (username, password) =>
     USE_MOCK
       ? mock.login(username, password)
-      : request('/auth/login', { method: 'POST', body: { username, password } }),
+      : request(`/game/player/by-username/${encodeURIComponent(username)}`).then(rememberPlayer),
 
-  logout: () => (USE_MOCK ? mock.logout() : request('/auth/logout', { method: 'POST' })),
+  logout: async () => {
+    if (USE_MOCK) return mock.logout();
+    clearLiveState();
+    return { ok: true };
+  },
 
-  me: () => (USE_MOCK ? mock.me() : request('/auth/me')),
+  me: async () => (USE_MOCK ? mock.me() : rememberPlayer(await currentPlayer())),
 };
 
-// ---------------- game ----------------
 export const game = {
   getDungeon: (dungeonId) =>
-    USE_MOCK ? mock.getDungeon(dungeonId) : request(`/game/dungeon/${dungeonId}`),
+    USE_MOCK ? mock.getDungeon(dungeonId) : startDungeonSession(dungeonId),
 
-  enterRoom: (topic) =>
-    USE_MOCK ? mock.enterRoom(topic) : request('/game/room/enter', { method: 'POST', body: { topic } }),
+  enterRoom: async (topic) => {
+    if (USE_MOCK) return mock.enterRoom(topic);
+    hydrateLiveState();
+    if (!live.sessionId || !live.dungeon) await startDungeonSession('');
+    const room =
+      topic === 'boss'
+        ? live.dungeon.rooms.find((candidate) => candidate.is_boss)
+        : live.dungeon.rooms.find((candidate) => candidate.topic === topic);
+    if (!room) throw new Error(`No room exists for ${topic}.`);
 
-  submitAnswer: (payload) =>
-    USE_MOCK ? mock.submitAnswer(payload) : request('/game/answer/submit', { method: 'POST', body: payload }),
+    const response = await request('/game/room/enter', {
+      method: 'POST',
+      body: { session_id: live.sessionId, room_id: room.room_id },
+    });
+    const continuing = live.combat?.roomId === room.room_id && live.combat.enemyHp > 0;
+    const enemyHp = continuing ? live.combat.enemyHp : response.enemy_hp;
+    live.combat = {
+      roomId: room.room_id,
+      topic,
+      enemyHp,
+      enemyHpMax: continuing ? live.combat.enemyHpMax : response.enemy_hp,
+      playerHp: live.combat?.playerHp ?? 100,
+    };
+    persistLiveState();
+    return {
+      ...response.question,
+      enemy_hp: enemyHp,
+      enemy_hp_max: live.combat.enemyHpMax,
+      enemy_name: topic === 'boss' ? 'The Big-O Devourer' : `${TOPIC_LABELS[topic] || topic} Wraith`,
+    };
+  },
 
-  getPlayer: (playerId) =>
-    USE_MOCK ? mock.getPlayer(playerId) : request(`/game/player/${playerId}`),
+  submitAnswer: async (payload) => {
+    if (USE_MOCK) return mock.submitAnswer(payload);
+    const player = await currentPlayer();
+    const result = await request('/game/answer/submit', {
+      method: 'POST',
+      body: { ...payload, player_id: player.player_id },
+    });
+    const damageTaken = result.verdict === 'incorrect' ? 18 : result.verdict === 'partial' ? 8 : 0;
+    live.combat = live.combat || { enemyHp: 0, enemyHpMax: 0, playerHp: 100 };
+    live.combat.enemyHp = Math.max(0, live.combat.enemyHp - result.damage_dealt);
+    live.combat.playerHp = Math.max(0, live.combat.playerHp - damageTaken);
+    persistLiveState();
+    return {
+      ...result,
+      player_hp_after: live.combat.playerHp,
+      enemy_hp_after: live.combat.enemyHp,
+    };
+  },
 
-  joinGuildRaid: (guildId) =>
-    USE_MOCK
-      ? mock.joinGuildRaid(guildId)
-      : request('/game/guild/raid/join', { method: 'POST', body: { guild_id: guildId } }),
+  getPlayer: async (playerId) => {
+    if (USE_MOCK) return mock.getPlayer(playerId);
+    const player = await request(`/game/player/${playerId}`);
+    return { ...player, topic_accuracies: accuracyMap(player) };
+  },
 
-  getLeaderboard: () => (USE_MOCK ? mock.getLeaderboard() : request('/game/leaderboard')),
+  joinGuildRaid: async (guildId) => {
+    if (USE_MOCK) return mock.joinGuildRaid(guildId);
+    const player = await currentPlayer();
+    let activeGuildId = guildId || player.guild_id;
+    if (!activeGuildId) {
+      const created = await request('/game/guild/create', {
+        method: 'POST',
+        body: { name: `${player.username}'s Guild`, creator_player_id: player.player_id },
+      });
+      activeGuildId = created.guild_id;
+    }
+    const joined = await request('/game/guild/raid/join', {
+      method: 'POST',
+      body: { guild_id: activeGuildId, player_id: player.player_id },
+    });
+    const [guild, status] = await Promise.all([
+      request(`/game/guild/${activeGuildId}`),
+      request(`/game/guild/raid/status?guild_id=${activeGuildId}`),
+    ]);
+    return {
+      ...guild,
+      raid_active: joined.raid_active,
+      raid_boss_hp: Math.max(0, status.raid_boss_hp - status.raid_boss_damage),
+      raid_boss_hp_max: status.raid_boss_hp,
+      members: status.members.map((member) => ({
+        ...member,
+        topic: status.topic_assignments[member.player_id] || 'arrays',
+      })),
+    };
+  },
 
-  // Mock-mode-only convenience — see lib/mock/mockData.js respawn(). Once
-  // real backend HP/death rules exist, point this at whatever P2 builds
-  // (or remove if the backend handles respawn implicitly).
-  respawn: () => (USE_MOCK ? mock.respawn() : Promise.resolve({ ok: true })),
+  getLeaderboard: async () =>
+    USE_MOCK ? mock.getLeaderboard() : { leaderboard: await request('/game/leaderboard') },
+
+  respawn: async () => {
+    if (USE_MOCK) return mock.respawn();
+    live.combat = null;
+    persistLiveState();
+    return { ok: true };
+  },
 };
 
-// ---------------- ai (judge dashboard only — all other /ai/* routes are
-// called server-to-server by P2, never directly by the frontend) ----------------
 export const ai = {
-  getDashboard: (playerId) =>
-    USE_MOCK ? mock.getDashboard(playerId) : request(`/ai/dashboard/${playerId}`),
+  getDashboard: async (playerId) => {
+    if (USE_MOCK) return mock.getDashboard(playerId);
+    const data = await request(`/ai/dashboard/${playerId}`);
+    const nodes = Object.entries(TOPIC_GRAPH).map(([topic]) => ({
+      id: topic,
+      label: TOPIC_LABELS[topic] || topic,
+      accuracy: data.topic_accuracies[topic] ?? 0,
+      status: data.graph_state[topic] || 'locked',
+    }));
+    const edges = Object.entries(TOPIC_GRAPH).flatMap(([target, prerequisites]) =>
+      prerequisites.map((source) => ({ source, target }))
+    );
+    return { ...data, graph: { nodes, edges } };
+  },
 };

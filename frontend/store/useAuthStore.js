@@ -9,7 +9,7 @@ export const useAuthStore = create(
     (set, get) => ({
       player: null,
       isAuthenticated: false,
-      loading: true, // true until the initial /auth/me check resolves
+      loading: true, // true until the initial player-session check resolves
       error: null,
 
       async fetchMe() {
@@ -65,9 +65,7 @@ export const useAuthStore = create(
     }),
     {
       name: 'codecrypt-auth',
-      // Only persist display info, never tokens — real auth lives in the
-      // backend's httpOnly cookie. This is just so a refresh doesn't flash
-      // a logged-out UI before /auth/me resolves.
+      // Persist display data only; the API adapter revalidates the player on load.
       partialize: (s) => ({ player: s.player, isAuthenticated: s.isAuthenticated }),
     }
   )

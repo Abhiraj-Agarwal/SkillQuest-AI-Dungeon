@@ -3,6 +3,8 @@ import httpx
 import sys
 sys.path.insert(0, ".")
 
+from db.database import SessionLocal
+
 BASE = "http://localhost:8000"
 c = httpx.Client(timeout=10.0)
 
