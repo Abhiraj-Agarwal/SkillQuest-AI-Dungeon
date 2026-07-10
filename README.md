@@ -1,47 +1,71 @@
-# SkillQuest: AI Dungeon
+# SkillQuest: The AI Dungeon
 
-An educational RPG where students fight dungeon monsters by answering DSA questions. Adaptive difficulty, NLP answer judging, and a live knowledge graph make every run feel different.
+SkillQuest is an adaptive educational dungeon crawler where players learn Data Structures and Algorithms by fighting monsters with correct answers. The game combines a Next.js interface, a FastAPI game server, SQLite persistence, generated questions, semantic answer judging, adaptive difficulty, and knowledge-graph routing.
 
----
+## Repository Layout
 
-## Team Structure
+```text
+SkillQuest-AI-Dungeon/
+|-- frontend/   Next.js player experience and judge dashboard
+|-- backend/    FastAPI game API, SQLite models, game logic, and seed data
+|-- services/   Standalone AI/ML service implementation
+`-- README.md
+```
 
-### Person 1 — Frontend (The Experience Layer)
+## Team Ownership
 
-Owns everything the judge sees and touches. Pages: DungeonMap, Combat, StatSheet, BossFight, Guild, Leaderboard. Components: HealthBar, XPBar, HintToken, MLDashboard. All backend communication goes through a single `api/client.js` file — no component calls `fetch` directly. Builds against mock data from Day 1; real endpoints are a one-line swap per call when P2 publishes them.
+### Person 1: Frontend
 
-**Stack:** Next.js 15 App Router, React 19, Tailwind CSS, Zustand
+Owns the dungeon map, combat and boss fights, character stats, guild, leaderboard, and ML dashboard. All browser-to-server communication is centralized in `frontend/lib/api/client.js`; the UI can run against mock data while backend integration is unavailable.
 
----
+**Stack:** Next.js 15, React 19, Tailwind CSS, Zustand, TanStack Query
 
-### Person 2 — Backend (The Glue Layer)
+### Person 2: Backend
 
-Owns the FastAPI server, SQLite database, all game logic, and the API contracts that govern how the team communicates. Publishes the contract document on Day 1 before anyone else writes a meaningful line of code. Core endpoints: session start, dungeon structure, room entry (calls P3 for difficulty + question), answer submission (calls P3 to judge, writes AccuracyHistory), player stats, guild raid, leaderboard. The AccuracyHistory write on every submission is the single most critical database operation in the project — P3's RL tuner reads it from Day 3 onward.
+Owns the FastAPI game server, SQLite database, API contracts, game rules, demo seed data, guilds, leaderboards, and the critical accuracy-history update performed after every answer submission.
 
 **Stack:** FastAPI, SQLAlchemy, SQLite
 
----
+### Person 3: AI/ML
 
-### Person 3 — AI/ML (The Intelligence Layer)
+Owns question generation, semantic answer judging, adaptive difficulty, and knowledge-graph topic routing under `/ai/`. These services consume request data supplied by the game server and do not own game state or database writes.
 
-Owns four endpoints under `/ai/`. Never touches the database or game logic directly — P2 is the customer, these are vendor services. Deliverables: `POST /ai/question/generate` (LLM prompt with retry and JSON validation), `POST /ai/answer/judge` (sentence-transformer cosine similarity with LLM fallback on borderline scores), `POST /ai/difficulty/next` (threshold-based RL tuner, epsilon-greedy bandit as a Day 5 upgrade), `POST /ai/graph/next-topic` (prerequisite-aware topic routing), and `GET /ai/dashboard/{player_id}` (aggregated judge demo panel). Critical dependency: P2 must confirm AccuracyHistory writes are live by end of Day 2.
+**Stack:** FastAPI, Google Gemini, sentence-transformers
 
-**Stack:** FastAPI, google-genai, sentence-transformers (all-MiniLM-L6-v2)
+## Run Locally
 
----
+### Frontend
 
-## Repo Layout
-
-```
-SkillQuest-AI-Dungeon/
-├── frontend/        Person 1
-├── backend/         Person 2
-├── services/        Person 3
-└── README.md
+```bash
+cd frontend
+npm install
+npm run dev
 ```
 
----
+The frontend runs at `http://localhost:3000`. It uses mock data by default. Copy `frontend/.env.local.example` to `frontend/.env.local` and set `NEXT_PUBLIC_USE_MOCK=false` to use the game API.
 
-## API Contract (published by P2 on Day 1)
+### Backend
 
-All contracts live in `backend/contracts/`. No one builds against an undocumented endpoint.
+```bash
+cd backend
+python -m venv .venv
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8000
+```
+
+Copy `backend/.env.example` to `backend/.env` before enabling real AI. Keep `USE_MOCK_AI=true` for a local run without a Gemini API key. API documentation is available at `http://localhost:8000/docs`.
+
+## Core API
+
+- `POST /game/session/start`
+- `GET /game/dungeon/{dungeon_id}`
+- `POST /game/room/enter`
+- `POST /game/answer/submit`
+- `GET /game/player/{player_id}`
+- `POST /game/guild/raid/join`
+- `GET /game/leaderboard`
+- `POST /ai/question/generate`
+- `POST /ai/answer/judge`
+- `POST /ai/difficulty/next`
+- `POST /ai/graph/next-topic`
+- `GET /ai/dashboard/{player_id}`

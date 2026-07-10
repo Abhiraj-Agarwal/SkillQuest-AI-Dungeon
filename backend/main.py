@@ -1,0 +1,97 @@
+"""
+SkillQuest Backend — FastAPI entry point.
+"""
+import os
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from db.database import engine, Base
+
+# Import all models so tables are registered with Base.metadata
+from models.player import Player
+from models.accuracy_history import AccuracyHistory
+from models.question import Question
+from models.submission import AnswerSubmission
+from models.guild import Guild
+from models.dungeon import Dungeon, Room
+from models.session import GameSession
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Create all tables on startup, seed demo data."""
+    Base.metadata.create_all(bind=engine)
+    print("Database tables created.")
+
+    # Auto-seed the demo dungeon
+    from db.seed import seed_database
+    seed_database()
+
+    yield
+
+
+app = FastAPI(
+    title="SkillQuest API",
+    description="The AI Dungeon — adaptive learning RPG backend",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+# CORS — allow frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Request logging middleware
+import time
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.requests import Request
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        start_time = time.time()
+        response = await call_next(request)
+        duration_ms = (time.time() - start_time) * 1000
+        print(f"[{request.method}] {request.url.path} -> {response.status_code} ({duration_ms:.1f}ms)")
+        return response
+
+
+app.add_middleware(RequestLoggingMiddleware)
+
+# Import and include routers
+from routes.game import router as game_router
+
+USE_MOCK_AI = os.getenv("USE_MOCK_AI", "true").lower() == "true"
+
+if USE_MOCK_AI:
+    from routes.ai_mock import router as ai_router
+    print("Using MOCK AI endpoints")
+else:
+    from routes.ai_real import router as ai_router
+    print("Using REAL Gemini AI endpoints")
+
+app.include_router(game_router)
+app.include_router(ai_router)
+
+
+@app.get("/health")
+async def health_check():
+    return {"status": "ok"}
+
+
+@app.get("/")
+async def root():
+    return {
+        "app": "SkillQuest: The AI Dungeon",
+        "version": "1.0.0",
+        "docs": "/docs",
+    }
