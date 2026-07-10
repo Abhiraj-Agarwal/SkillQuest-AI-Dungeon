@@ -12,21 +12,13 @@ export default function RegisterPage() {
   const router = useRouter();
   const { register, error, clearError } = useAuthStore();
   const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirm, setConfirm] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [localError, setLocalError] = useState(null);
 
   async function handleSubmit(e) {
     e.preventDefault();
     clearError();
-    setLocalError(null);
-    if (password !== confirm) {
-      setLocalError('Passwords do not match.');
-      return;
-    }
     setSubmitting(true);
-    const ok = await register(username, password);
+    const ok = await register(username);
     setSubmitting(false);
     if (ok) router.push('/dungeon');
   }
@@ -44,27 +36,7 @@ export default function RegisterPage() {
             required
             autoComplete="username"
           />
-          <PixelInput
-            id="password"
-            label="PASSWORD"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            autoComplete="new-password"
-          />
-          <PixelInput
-            id="confirm"
-            label="CONFIRM PASSWORD"
-            type="password"
-            value={confirm}
-            onChange={(e) => setConfirm(e.target.value)}
-            required
-            autoComplete="new-password"
-          />
-          {(localError || error) && (
-            <p className="font-body text-blood text-sm">{localError || error}</p>
-          )}
+          {error && <p className="font-body text-blood text-sm">{error}</p>}
           <PixelButton type="submit" variant="arcane" disabled={submitting} className="mt-2">
             {submitting ? 'FORGING…' : 'BEGIN'}
           </PixelButton>

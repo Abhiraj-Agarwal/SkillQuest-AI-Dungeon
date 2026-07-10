@@ -24,6 +24,9 @@ DEFAULT_DOMAIN = os.getenv("DEFAULT_DOMAIN", "Data Structures & Algorithms")
 # --- NLP judge thresholds -----------------------------------------------------
 JUDGE_CORRECT_THRESHOLD = float(os.getenv("JUDGE_CORRECT_THRESHOLD", "0.65"))
 JUDGE_PARTIAL_THRESHOLD = float(os.getenv("JUDGE_PARTIAL_THRESHOLD", "0.30"))
+JUDGE_LOCAL_CORRECT_THRESHOLD = float(
+    os.getenv("JUDGE_LOCAL_CORRECT_THRESHOLD", "0.50")
+)
 # Widened from the README's literal 0.55-0.70 -- see .env.example for the
 # measured-score rationale (all-MiniLM-L6-v2 paraphrase scores ranged 0.52-0.83
 # on real DSA test pairs, wider than the originally specified band).

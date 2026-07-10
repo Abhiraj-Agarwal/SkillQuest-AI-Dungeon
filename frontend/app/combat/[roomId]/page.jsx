@@ -33,7 +33,7 @@ export default function CombatPage() {
     hintRevealed,
     enterRoom,
     submitAnswer,
-    revealHintLocally,
+    revealHint,
     resetCombat,
     retreat,
   } = useGameStore();
@@ -53,9 +53,9 @@ export default function CombatPage() {
     const id = Date.now();
     const text =
       lastResult.verdict === 'correct'
-        ? `-${Math.round(25 * lastResult.damage_multiplier)} HP  +${lastResult.xp_gained} XP`
+        ? `-${lastResult.damage_dealt} HP  +${lastResult.xp_gained} XP`
         : lastResult.verdict === 'partial'
-        ? `-${Math.round(25 * lastResult.damage_multiplier)} HP`
+        ? `-${lastResult.damage_dealt} HP`
         : 'MISS';
     setFloats((f) => [...f, { id, text, tone: lastResult.verdict === 'incorrect' ? 'damage' : 'xp' }]);
     const t = setTimeout(() => setFloats((f) => f.filter((x) => x.id !== id)), 1000);
@@ -130,7 +130,7 @@ export default function CombatPage() {
             tokensRemaining={player.hint_tokens}
             maxTokens={3}
             used={hintRevealed}
-            onUse={() => revealHintLocally(spendHintToken)}
+            onUse={() => revealHint(player.player_id, spendHintToken)}
           />
         </div>
       </PixelPanel>

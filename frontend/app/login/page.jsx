@@ -12,14 +12,13 @@ export default function LoginPage() {
   const router = useRouter();
   const { login, error, clearError } = useAuthStore();
   const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(e) {
     e.preventDefault();
     clearError();
     setSubmitting(true);
-    const ok = await login(username, password);
+    const ok = await login(username);
     setSubmitting(false);
     if (ok) router.push('/dungeon');
   }
@@ -36,15 +35,6 @@ export default function LoginPage() {
             onChange={(e) => setUsername(e.target.value)}
             required
             autoComplete="username"
-          />
-          <PixelInput
-            id="password"
-            label="PASSWORD"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            autoComplete="current-password"
           />
           {error && <p className="font-body text-blood text-sm">{error}</p>}
           <PixelButton type="submit" variant="arcane" disabled={submitting} className="mt-2">

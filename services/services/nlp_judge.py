@@ -6,6 +6,8 @@ expected_answer arrive directly in the request body -- this module never
 needs to look anything up itself.
 """
 
+import re
+
 import numpy as np
 from google import genai
 from google.genai import types
@@ -67,6 +69,29 @@ def _verdict_from_score(score: float) -> str:
     return "incorrect"
 
 
+def _complexity_terms(text: str) -> set[str]:
+    return {
+        re.sub(r"\s+", "", term.lower())
+        for term in re.findall(r"\bO\s*\(([^)]+)\)", text, flags=re.IGNORECASE)
+    }
+
+
+def _local_fallback_verdict(
+    score: float, player_answer: str, expected_answer: str
+) -> str:
+    player_complexities = _complexity_terms(player_answer)
+    expected_complexities = _complexity_terms(expected_answer)
+    if (
+        player_complexities
+        and expected_complexities
+        and player_complexities.isdisjoint(expected_complexities)
+    ):
+        return "partial" if score >= config.JUDGE_PARTIAL_THRESHOLD else "incorrect"
+    if score >= config.JUDGE_LOCAL_CORRECT_THRESHOLD:
+        return "correct"
+    return _verdict_from_score(score)
+
+
 async def _llm_fallback_verdict(
     question: str, expected_answer: str, player_answer: str, fallback_score: float
 ) -> str:
@@ -76,7 +101,9 @@ async def _llm_fallback_verdict(
     )
     client = _get_client()
     if client is None:
-        return _verdict_from_score(fallback_score)
+        return _local_fallback_verdict(
+            fallback_score, player_answer, expected_answer
+        )
     try:
         response = await client.aio.models.generate_content(
             model=config.LLM_MODEL,
@@ -87,7 +114,9 @@ async def _llm_fallback_verdict(
             ),
         )
     except Exception:
-        return _verdict_from_score(fallback_score)
+        return _local_fallback_verdict(
+            fallback_score, player_answer, expected_answer
+        )
     reply = (response.text or "").strip().lower()
     if "yes" in reply:
         return "correct"
@@ -97,7 +126,7 @@ async def _llm_fallback_verdict(
         return "incorrect"
     # Fallback call returned something unparseable -- fall back to the
     # threshold-based verdict rather than crashing the answer-submit flow.
-    return _verdict_from_score(fallback_score)
+    return _local_fallback_verdict(fallback_score, player_answer, expected_answer)
 
 
 # INTEGRATION NOTE: In production, expected_answer comes from the Question

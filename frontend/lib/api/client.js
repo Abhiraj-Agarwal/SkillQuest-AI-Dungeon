@@ -87,10 +87,12 @@ function accuracyMap(player) {
 
 function normalizeDungeon(dungeon, player) {
   const accuracies = accuracyMap(player);
-  const rooms = dungeon.rooms.map((room) => {
+  const rooms = dungeon.rooms.filter((room) => room.topic in TOPIC_GRAPH).map((room) => {
     const recentAccuracy = accuracies[room.topic] ?? 0;
+    const prerequisites = TOPIC_GRAPH[room.topic] || [];
+    const isUnlocked = prerequisites.every((topic) => (accuracies[topic] ?? 0) > 0.65);
     let status = 'unlocked';
-    if (!room.is_unlocked) status = 'locked';
+    if (!isUnlocked) status = 'locked';
     else if (recentAccuracy > 0.8) status = 'mastered';
     else if (recentAccuracy > 0 && recentAccuracy < 0.5) status = 'weak';
 
@@ -99,7 +101,7 @@ function normalizeDungeon(dungeon, player) {
       label: TOPIC_LABELS[room.topic] || room.topic,
       status,
       recent_accuracy: recentAccuracy,
-      prerequisites: TOPIC_GRAPH[room.topic] || [],
+      prerequisites,
     };
   });
   const candidates = rooms.filter((room) => room.status !== 'locked' && !room.is_boss);
@@ -111,7 +113,9 @@ function normalizeDungeon(dungeon, player) {
     domain: dungeon.domain,
     rooms,
     next_topic: nextRoom?.topic ?? null,
-    boss_unlocked: rooms.some((room) => room.is_boss && room.is_unlocked),
+    boss_unlocked: Object.keys(TOPIC_GRAPH).every(
+      (topic) => (accuracies[topic] ?? 0) > 0.65
+    ),
   };
 }
 
@@ -138,14 +142,14 @@ async function startDungeonSession(requestedDungeonId) {
 }
 
 export const auth = {
-  register: (username, password) =>
+  register: (username) =>
     USE_MOCK
-      ? mock.register(username, password)
+      ? mock.register(username)
       : request('/game/player/create', { method: 'POST', body: { username } }).then(rememberPlayer),
 
-  login: (username, password) =>
+  login: (username) =>
     USE_MOCK
-      ? mock.login(username, password)
+      ? mock.login(username)
       : request(`/game/player/by-username/${encodeURIComponent(username)}`).then(rememberPlayer),
 
   logout: async () => {
@@ -216,6 +220,14 @@ export const game = {
     if (USE_MOCK) return mock.getPlayer(playerId);
     const player = await request(`/game/player/${playerId}`);
     return { ...player, topic_accuracies: accuracyMap(player) };
+  },
+
+  useHint: async (playerId, questionId) => {
+    if (USE_MOCK) return { ok: true };
+    return request('/game/hint/use', {
+      method: 'POST',
+      body: { player_id: playerId, question_id: questionId },
+    });
   },
 
   joinGuildRaid: async (guildId) => {

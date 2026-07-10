@@ -41,7 +41,7 @@ export const useGameStore = create((set, get) => ({
           playerHp: get().combat?.playerHp ?? 100,
           playerHpMax: 100,
           enemyHp: q.enemy_hp,
-          enemyHpMax: q.enemy_hp,
+          enemyHpMax: q.enemy_hp_max ?? q.enemy_hp,
           enemyName: q.enemy_name,
         },
         enteringRoom: false,
@@ -79,13 +79,16 @@ export const useGameStore = create((set, get) => ({
     }
   },
 
-  // NOTE for P2: no dedicated hint-spend endpoint exists in the current API
-  // contract. This decrements client-side only for now — flag to the team
-  // whether hint spend should be server-authoritative (recommended, so
-  // tokens can't be refilled by refreshing) and add e.g. POST /game/hint/use.
-  revealHintLocally(decrementFn) {
-    set({ hintRevealed: true });
-    decrementFn?.();
+  async revealHint(playerId, decrementFn) {
+    const questionId = get().currentQuestion?.question_id;
+    if (!questionId) return;
+    try {
+      await game.useHint(playerId, questionId);
+      set({ hintRevealed: true, submitError: null });
+      decrementFn?.();
+    } catch (e) {
+      set({ submitError: e.message });
+    }
   },
 
   resetCombat() {

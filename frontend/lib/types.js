@@ -67,6 +67,7 @@
  * @property {number} damage_multiplier
  * @property {string} feedback
  * @property {number} xp_gained
+ * @property {number} damage_dealt
  * @property {number} player_hp_after
  * @property {number} enemy_hp_after
  */

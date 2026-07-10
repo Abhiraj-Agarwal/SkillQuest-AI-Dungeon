@@ -156,7 +156,7 @@ async def enter_room(body: RoomEnterRequest, db: Session = Depends(get_db)):
     room = db.query(Room).filter(Room.room_id == body.room_id).first()
     if not room:
         raise HTTPException(status_code=404, detail="Room not found")
-    if not room.is_unlocked:
+    if not _is_room_unlocked_for_player(db, session.player_id, room, session.dungeon_id):
         raise HTTPException(status_code=400, detail="Room is locked")
 
     session.current_room_id = room.room_id
@@ -260,6 +260,7 @@ async def submit_answer(body: AnswerSubmitRequest, db: Session = Depends(get_db)
         verdict=verdict, response_time_ms=body.response_time_ms,
     )
     db.add(submission)
+    db.flush()
 
     # Check room clear
     room_cleared = False
@@ -274,12 +275,8 @@ async def submit_answer(body: AnswerSubmitRequest, db: Session = Depends(get_db)
                 AnswerSubmission.player_id == body.player_id, Question.topic == room.topic,
                 AnswerSubmission.verdict == "correct",
             ).count()
-            if verdict == "correct":
-                correct_count += 1
             room_cleared = check_room_clear(correct_count, room.enemy_count)
             if room_cleared:
-                _unlock_dependent_rooms(db, room, active_session.dungeon_id)
-
                 # Check dungeon completion — all rooms cleared?
                 all_rooms = db.query(Room).filter(Room.dungeon_id == active_session.dungeon_id).all()
                 room_statuses = []
@@ -317,18 +314,24 @@ async def submit_answer(body: AnswerSubmitRequest, db: Session = Depends(get_db)
     )
 
 
-def _unlock_dependent_rooms(db: Session, cleared_room: Room, dungeon_id: str):
+def _is_room_unlocked_for_player(
+    db: Session, player_id: str, room: Room, dungeon_id: str
+) -> bool:
     from services.knowledge_graph import TOPIC_GRAPH
-    for topic, prereqs in TOPIC_GRAPH.items():
-        if cleared_room.topic in prereqs:
-            all_met = all(
-                (r := db.query(Room).filter(Room.dungeon_id == dungeon_id, Room.topic == p).first()) and r.is_unlocked
-                for p in prereqs
-            )
-            if all_met:
-                t = db.query(Room).filter(Room.dungeon_id == dungeon_id, Room.topic == topic).first()
-                if t and not t.is_unlocked:
-                    t.is_unlocked = True
+
+    histories = db.query(AccuracyHistory).filter(
+        AccuracyHistory.player_id == player_id
+    ).all()
+    accuracies = {history.topic: history.recent_accuracy for history in histories}
+    if room.is_boss:
+        topic_rooms = db.query(Room).filter(
+            Room.dungeon_id == dungeon_id, Room.is_boss == False
+        ).all()
+        return all(accuracies.get(candidate.topic, 0) > 0.65 for candidate in topic_rooms)
+    prerequisites = TOPIC_GRAPH.get(room.topic)
+    if prerequisites is None:
+        return False
+    return all(accuracies.get(topic, 0) > 0.65 for topic in prerequisites)
 
 
 # ─── Next Topic Routing (Knowledge Graph AI) ───

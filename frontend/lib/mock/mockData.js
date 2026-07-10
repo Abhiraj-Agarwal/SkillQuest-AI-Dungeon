@@ -153,10 +153,10 @@ function requireAuth() {
 
 // ---------------- public mock API (same shapes the real client.js expects) ----------------
 
-export async function register(username, password) {
+export async function register(username) {
   await delay(MOCK_LATENCY.fast);
-  if (!username || !password) {
-    const err = new Error('Username and password required');
+  if (!username) {
+    const err = new Error('Character name required');
     err.code = 400;
     throw err;
   }
@@ -177,11 +177,11 @@ export async function register(username, password) {
   return { player: state.player };
 }
 
-export async function login(username, _password) {
+export async function login(username) {
   await delay(MOCK_LATENCY.fast);
   if (!state.player || state.player.username !== username) {
     // mock mode: auto-provision so teammates can demo without a real DB
-    return register(username, _password);
+    return register(username);
   }
   return { player: state.player };
 }

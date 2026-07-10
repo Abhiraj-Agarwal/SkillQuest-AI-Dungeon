@@ -13,7 +13,8 @@ export const useAuthStore = create(
       error: null,
 
       async fetchMe() {
-        set({ loading: true });
+        const isInitialLoad = !get().player;
+        if (isInitialLoad) set({ loading: true });
         try {
           const { player } = await auth.me();
           set({ player, isAuthenticated: true, loading: false, error: null });
@@ -22,10 +23,10 @@ export const useAuthStore = create(
         }
       },
 
-      async login(username, password) {
+      async login(username) {
         set({ error: null });
         try {
-          const { player } = await auth.login(username, password);
+          const { player } = await auth.login(username);
           set({ player, isAuthenticated: true });
           return true;
         } catch (e) {
@@ -34,10 +35,10 @@ export const useAuthStore = create(
         }
       },
 
-      async register(username, password) {
+      async register(username) {
         set({ error: null });
         try {
-          const { player } = await auth.register(username, password);
+          const { player } = await auth.register(username);
           set({ player, isAuthenticated: true });
           return true;
         } catch (e) {

@@ -36,21 +36,26 @@ Owns question generation, semantic answer judging, adaptive difficulty, and know
 
 ### Frontend
 
-```bash
+```powershell
 cd frontend
 npm install
+if (-not (Test-Path .env.local)) { Copy-Item .env.local.example .env.local }
 npm run dev
 ```
 
 The frontend runs at `http://localhost:3000`. It uses mock data by default. Copy `frontend/.env.local.example` to `frontend/.env.local` and set `NEXT_PUBLIC_USE_MOCK=false` to use the game API.
 
+Player access is character-name based in this hackathon build; it is not a password authentication system.
+
 ### Backend
 
-```bash
+```powershell
 cd backend
-python -m venv .venv
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
+if (-not (Test-Path .venv\Scripts\python.exe)) { py -3.12 -m venv .venv }
+& .\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements-dev.txt
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+python -m uvicorn main:app --reload --port 8000
 ```
 
 Python 3.12 is recommended for the pinned dependency set. Copy `backend/.env.example` to `backend/.env` before enabling real AI. Keep `USE_MOCK_AI=true` for a local run without a Gemini API key. API documentation is available at `http://localhost:8000/docs`.

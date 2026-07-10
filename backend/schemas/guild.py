@@ -1,8 +1,9 @@
 """
 Guild Pydantic schemas.
 """
-from pydantic import BaseModel
-from typing import List, Optional, Dict
+from typing import List, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class GuildCreate(BaseModel):
@@ -11,14 +12,13 @@ class GuildCreate(BaseModel):
 
 
 class GuildResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     guild_id: str
     name: str
-    members: List[dict] = []
+    members: List[dict] = Field(default_factory=list)
     raid_active: bool
     raid_boss_id: Optional[str] = None
-
-    class Config:
-        from_attributes = True
 
 
 class RaidJoinRequest(BaseModel):

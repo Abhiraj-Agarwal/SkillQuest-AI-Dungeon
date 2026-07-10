@@ -18,6 +18,24 @@ def seed_database():
     # Check if already seeded
     existing = db.query(Dungeon).filter(Dungeon.name == "DSA Fundamentals").first()
     if existing:
+        boss = db.query(Room).filter(
+            Room.dungeon_id == existing.dungeon_id, Room.topic == "boss"
+        ).first()
+        if not boss:
+            for room in existing.rooms:
+                room.is_boss = False
+            db.add(
+                Room(
+                    dungeon_id=existing.dungeon_id,
+                    topic="boss",
+                    enemy_count=5,
+                    is_boss=True,
+                    is_unlocked=False,
+                    order_index=len(existing.rooms),
+                )
+            )
+            db.commit()
+            print("Migrated dungeon to a dedicated boss room.")
         print("Database already seeded.")
         db.close()
         return existing.dungeon_id
@@ -30,16 +48,26 @@ def seed_database():
     # Create rooms in topological order
     topics_order = list(TOPIC_GRAPH.keys())
     for i, topic in enumerate(topics_order):
-        is_boss = (topic == topics_order[-1])  # Last topic is boss
         room = Room(
             dungeon_id=dungeon.dungeon_id,
             topic=topic,
-            enemy_count=5 if is_boss else 3,
-            is_boss=is_boss,
+            enemy_count=3,
+            is_boss=False,
             is_unlocked=(i == 0),  # Only first room starts unlocked
             order_index=i,
         )
         db.add(room)
+
+    db.add(
+        Room(
+            dungeon_id=dungeon.dungeon_id,
+            topic="boss",
+            enemy_count=5,
+            is_boss=True,
+            is_unlocked=False,
+            order_index=len(topics_order),
+        )
+    )
 
     # Create demo player with pre-populated history
     demo_player = Player(
@@ -74,7 +102,7 @@ def seed_database():
 
     db.commit()
     print(f"Seeded dungeon: {dungeon.name} (ID: {dungeon.dungeon_id})")
-    print(f"Created {len(topics_order)} rooms.")
+    print(f"Created {len(topics_order)} topic rooms and one boss room.")
     print(f"Created demo player: {demo_player.username} (ID: {demo_player.player_id})")
 
     dungeon_id = dungeon.dungeon_id

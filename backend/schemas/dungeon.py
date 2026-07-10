@@ -1,11 +1,14 @@
 """
 Dungeon and session Pydantic schemas.
 """
-from pydantic import BaseModel
 from typing import List, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RoomResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     room_id: str
     topic: str
     enemy_count: int
@@ -13,18 +16,14 @@ class RoomResponse(BaseModel):
     is_unlocked: bool
     order_index: int
 
-    class Config:
-        from_attributes = True
-
 
 class DungeonResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     dungeon_id: str
     name: str
     domain: str
-    rooms: List[RoomResponse] = []
-
-    class Config:
-        from_attributes = True
+    rooms: List[RoomResponse] = Field(default_factory=list)
 
 
 class SessionStartRequest(BaseModel):
@@ -33,12 +32,11 @@ class SessionStartRequest(BaseModel):
 
 
 class SessionStartResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     session_id: str
     dungeon: DungeonResponse
     current_room_id: Optional[str] = None
-
-    class Config:
-        from_attributes = True
 
 
 class RoomEnterRequest(BaseModel):
@@ -47,9 +45,8 @@ class RoomEnterRequest(BaseModel):
 
 
 class RoomEnterResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     room: RoomResponse
     question: dict  # question_id, question, hint, topic, difficulty
     enemy_hp: int
-
-    class Config:
-        from_attributes = True

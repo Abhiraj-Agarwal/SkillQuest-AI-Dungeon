@@ -1,8 +1,9 @@
 """
 Answer submission Pydantic schemas.
 """
-from pydantic import BaseModel
 from typing import Optional
+
+from pydantic import BaseModel, ConfigDict
 
 
 class AnswerSubmitRequest(BaseModel):
@@ -13,6 +14,8 @@ class AnswerSubmitRequest(BaseModel):
 
 
 class AnswerSubmitResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     submission_id: str
     score: float
     damage_multiplier: float
@@ -23,6 +26,3 @@ class AnswerSubmitResponse(BaseModel):
     room_cleared: bool = False
     new_level: Optional[int] = None
     dungeon_completed: bool = False
-
-    class Config:
-        from_attributes = True
