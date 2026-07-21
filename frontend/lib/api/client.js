@@ -101,25 +101,46 @@ function accuracyMap(player) {
   );
 }
 
-// `mastered` is a one-way ratchet set server-side the first time a topic's
-// recent_accuracy ever crosses the unlock threshold -- room-unlock checks
-// must use this (or the current accuracy) rather than current accuracy
-// alone, or a later dip in the rolling recent_accuracy window would silently
-// re-lock a room the player already legitimately opened.
-function provenMap(player) {
+function correctCountMap(player) {
   return Object.fromEntries(
-    (player.accuracy_history || []).map((entry) => [
-      entry.topic,
-      Boolean(entry.mastered) || entry.recent_accuracy > 0.65,
-    ])
+    (player.accuracy_history || []).map((entry) => [entry.topic, entry.correct ?? 0])
+  );
+}
+
+// A topic counts as "proven" (satisfies downstream prerequisites) either of
+// two ways: the accuracy ratchet (mastered, or currently above the unlock
+// threshold), or having actually cleared that topic's own room -- enough
+// correct answers to reach its enemy_count. Without the second path, a
+// player who clears a 3-hit room via e.g. 3 correct out of 5 attempts (60%
+// rolling accuracy, since recent_accuracy is a last-5 window, not a room-
+// clear count) would find downstream rooms still locked even though the
+// room's villain is dead and the victory screen already fired.
+function provenMap(player, rooms) {
+  const correctCounts = correctCountMap(player);
+  const enemyCountByTopic = Object.fromEntries((rooms || []).map((r) => [r.topic, r.enemy_count]));
+  return Object.fromEntries(
+    (player.accuracy_history || []).map((entry) => {
+      const accuracyProven = Boolean(entry.mastered) || entry.recent_accuracy > 0.65;
+      const required = enemyCountByTopic[entry.topic];
+      const cleared = typeof required === 'number' && required > 0 && correctCounts[entry.topic] >= required;
+      return [entry.topic, accuracyProven || cleared];
+    })
   );
 }
 
 function normalizeDungeon(dungeon, player) {
   const accuracies = accuracyMap(player);
-  const proven = provenMap(player);
+  const correctCounts = correctCountMap(player);
+  const proven = provenMap(player, dungeon.rooms);
   const rooms = (dungeon.rooms || []).filter((room) => room.topic in TOPIC_GRAPH).map((room) => {
     const recentAccuracy = accuracies[room.topic] ?? 0;
+    // The map tile's percentage is room-clear progress, not rolling accuracy
+    // -- a player who finishes a room expects to see it read as done, and
+    // recent_accuracy (a last-5-answers window) doesn't reliably reach 100%
+    // just because the room's hit requirement was satisfied.
+    const completion = room.enemy_count > 0
+      ? Math.min(1, (correctCounts[room.topic] ?? 0) / room.enemy_count)
+      : 0;
     const prerequisites = TOPIC_GRAPH[room.topic] || [];
     const isUnlocked = prerequisites.every((topic) => proven[topic]);
     let status = 'unlocked';
@@ -132,6 +153,7 @@ function normalizeDungeon(dungeon, player) {
       label: TOPIC_LABELS[room.topic] || room.topic,
       status,
       recent_accuracy: recentAccuracy,
+      completion,
       prerequisites,
     };
   });

@@ -560,16 +560,32 @@ def _is_room_unlocked_for_player(
     # counts as proven if it's mastered OR currently above the threshold, so
     # a later dip in the rolling recent_accuracy window can never re-lock a
     # room the player already legitimately opened.
-    proven = {h.topic for h in histories if h.mastered or h.recent_accuracy > 0.65}
+    proven_by_accuracy = {h.topic for h in histories if h.mastered or h.recent_accuracy > 0.65}
+    correct_by_topic = {h.topic: h.correct for h in histories}
+
+    all_rooms = db.query(Room).filter(Room.dungeon_id == dungeon_id).all()
+    enemy_count_by_topic = {r.topic: r.enemy_count for r in all_rooms}
+
+    def is_proven(topic: str) -> bool:
+        if topic in proven_by_accuracy:
+            return True
+        # A player who actually clears a room (enough correct answers to
+        # reach its enemy_count) has earned the unlock regardless of what
+        # their rolling last-5 accuracy says -- recent_accuracy and "did I
+        # beat this room's villain" are different measures that can diverge
+        # (e.g. 3 correct out of 5 attempts clears a 3-hit room at only 60%
+        # rolling accuracy), and a cleared room should never stay a locked
+        # gate for downstream topics.
+        required = enemy_count_by_topic.get(topic)
+        return required is not None and required > 0 and correct_by_topic.get(topic, 0) >= required
+
     if room.is_boss:
-        topic_rooms = db.query(Room).filter(
-            Room.dungeon_id == dungeon_id, Room.is_boss == False
-        ).all()
-        return all(candidate.topic in proven for candidate in topic_rooms)
+        topic_rooms = [r for r in all_rooms if not r.is_boss]
+        return all(is_proven(candidate.topic) for candidate in topic_rooms)
     prerequisites = TOPIC_GRAPH.get(room.topic)
     if prerequisites is None:
         return False
-    return all(topic in proven for topic in prerequisites)
+    return all(is_proven(topic) for topic in prerequisites)
 
 
 # ─── Next Topic Routing (Knowledge Graph AI) ───
