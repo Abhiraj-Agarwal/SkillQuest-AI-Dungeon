@@ -117,7 +117,10 @@ def _serialize_player(player: Player, histories: list[AccuracyHistory]) -> dict:
         # player). Clamping on read fixes the display without a DB migration.
         "hint_tokens": min(player.hint_tokens, MAX_HINT_TOKENS),
         "accuracy_history": [
-            {"topic": h.topic, "attempts": h.attempts, "correct": h.correct, "recent_accuracy": h.recent_accuracy}
+            {
+                "topic": h.topic, "attempts": h.attempts, "correct": h.correct,
+                "recent_accuracy": h.recent_accuracy, "mastered": h.mastered,
+            }
             for h in histories
         ],
         **_powerup_status(player),
@@ -464,6 +467,13 @@ async def submit_answer(body: AnswerSubmitRequest, db: Session = Depends(get_db)
     acc.attempts = new_att
     acc.correct = new_cor
     acc.recent_accuracy = new_acc
+    # One-way ratchet -- never unset once true. last_5_results is a rolling
+    # window, so recent_accuracy can legitimately dip back below the unlock
+    # threshold later; without this, a room the player already unlocked
+    # (and may already be mid-way through) could silently re-lock behind
+    # them because of an unrelated later question.
+    if new_acc > 0.65:
+        acc.mastered = True
 
     submission = AnswerSubmission(
         player_id=body.player_id, question_id=body.question_id,
@@ -540,16 +550,20 @@ def _is_room_unlocked_for_player(
     histories = db.query(AccuracyHistory).filter(
         AccuracyHistory.player_id == player_id
     ).all()
-    accuracies = {history.topic: history.recent_accuracy for history in histories}
+    # `mastered` is a one-way ratchet (see AccuracyHistory model) -- a topic
+    # counts as proven if it's mastered OR currently above the threshold, so
+    # a later dip in the rolling recent_accuracy window can never re-lock a
+    # room the player already legitimately opened.
+    proven = {h.topic for h in histories if h.mastered or h.recent_accuracy > 0.65}
     if room.is_boss:
         topic_rooms = db.query(Room).filter(
             Room.dungeon_id == dungeon_id, Room.is_boss == False
         ).all()
-        return all(accuracies.get(candidate.topic, 0) > 0.65 for candidate in topic_rooms)
+        return all(candidate.topic in proven for candidate in topic_rooms)
     prerequisites = TOPIC_GRAPH.get(room.topic)
     if prerequisites is None:
         return False
-    return all(accuracies.get(topic, 0) > 0.65 for topic in prerequisites)
+    return all(topic in proven for topic in prerequisites)
 
 
 # ─── Next Topic Routing (Knowledge Graph AI) ───
@@ -620,7 +634,8 @@ async def get_leaderboard(
     players = db.query(Player).order_by(Player.total_xp.desc()).offset(offset).limit(limit).all()
     return [{"rank": offset + i + 1, "player_id": p.player_id,
              "username": p.username, "level": p.level,
-             "total_xp": p.total_xp, "streak_days": p.streak_days} for i, p in enumerate(players)]
+             "total_xp": p.total_xp, "streak_days": p.streak_days,
+             "hero_id": p.hero_id} for i, p in enumerate(players)]
 
 
 @router.get("/leaderboard/guild")

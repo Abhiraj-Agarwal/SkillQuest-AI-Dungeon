@@ -37,6 +37,9 @@ async def lifespan(app: FastAPI):
         ("powerup_window_start", "TEXT"),
         ("powerup_uses_this_window", "INTEGER DEFAULT 0"),
     ])
+    ensure_columns("accuracy_history", [
+        ("mastered", "BOOLEAN DEFAULT 0"),
+    ])
 
     # Auto-seed the demo dungeon
     from db.seed import seed_database
