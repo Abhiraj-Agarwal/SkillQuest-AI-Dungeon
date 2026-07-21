@@ -8,6 +8,8 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { game } from '@/lib/api/client';
 import PixelPanel from '@/components/ui/PixelPanel';
 import PixelBadge from '@/components/ui/PixelBadge';
+import PixelSprite from '@/components/PixelSprite';
+import { heroOrDefault } from '@/lib/sprites/heroSprites';
 
 const RANK_TONE = ['gold', 'arcane', 'ember'];
 
@@ -37,7 +39,9 @@ export default function LeaderboardPage() {
           <p className="font-body text-parchment-dim">Tallying the realm&apos;s XP…</p>
         ) : (
           <div className="flex flex-col gap-2">
-            {board.map((row, i) => (
+            {board.map((row, i) => {
+              const hero = heroOrDefault(row.hero_id);
+              return (
               <div
                 key={row.player_id}
                 className={clsx(
@@ -47,7 +51,11 @@ export default function LeaderboardPage() {
               >
                 <div className="flex items-center gap-3">
                   <span className="font-display text-xs w-6 text-parchment-dim">#{i + 1}</span>
-                  <span className="font-body text-lg text-parchment">{row.username}</span>
+                  <PixelSprite src={hero.image} grid={hero.grid} palette={hero.palette} size={32} title={hero.name} className="border-2 border-black shrink-0" />
+                  <div className="flex flex-col">
+                    <span className="font-body text-lg text-parchment leading-tight">{row.username}</span>
+                    <span className="font-body text-sm text-parchment-dim leading-tight">{hero.name}</span>
+                  </div>
                   {i < 3 && <PixelBadge tone={RANK_TONE[i]}>TOP {i + 1}</PixelBadge>}
                 </div>
                 <div className="flex items-center gap-3">
@@ -55,7 +63,8 @@ export default function LeaderboardPage() {
                   <span className="font-body text-lg text-gold">{row.total_xp} XP</span>
                 </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </PixelPanel>

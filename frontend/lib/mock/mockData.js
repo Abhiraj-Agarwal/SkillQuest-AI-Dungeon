@@ -9,6 +9,7 @@
 import { MOCK_LATENCY, DUNGEON_ID, DOMAIN } from '../config';
 import { TOPIC_GRAPH, TOPIC_LABELS } from '../statMap';
 import { HEROES, DEFAULT_HERO_ID } from '../sprites/heroSprites';
+import { monsterForTopic } from '../sprites/monsterSprites';
 
 const POWERUP_MAX_USES_PER_WINDOW = 3;
 const POWERUP_WINDOW_MS = 60 * 60 * 1000;
@@ -90,7 +91,7 @@ let state = {
 function freshAccuracy() {
   const acc = {};
   TOPICS.forEach((t) => {
-    acc[t] = { topic: t, attempts: 0, correct: 0, recent_accuracy: 0, last_5_results: [] };
+    acc[t] = { topic: t, attempts: 0, correct: 0, recent_accuracy: 0, last_5_results: [], mastered: false };
   });
   return acc;
 }
@@ -112,9 +113,18 @@ function saveToStorage() {
 
 loadFromStorage();
 
+// Mirrors the backend's one-way `mastered` ratchet: a topic counts as
+// proven once its recent_accuracy has EVER crossed the unlock threshold, so
+// a later dip in the rolling last_5_results window can't re-lock a room the
+// player already legitimately opened.
+function isProven(topic) {
+  const a = state.accuracy[topic];
+  return Boolean(a?.mastered) || (a?.recent_accuracy ?? 0) > 0.65;
+}
+
 function statusForTopic(topic) {
   const prereqs = TOPIC_GRAPH[topic];
-  const unlocked = prereqs.every((p) => (state.accuracy[p]?.recent_accuracy ?? 0) > 0.65);
+  const unlocked = prereqs.every((p) => isProven(p));
   if (!unlocked) return 'locked';
   const acc = state.accuracy[topic]?.recent_accuracy ?? 0;
   if (acc === 0) return 'unlocked';
@@ -124,7 +134,9 @@ function statusForTopic(topic) {
 }
 
 function bossUnlocked() {
-  return TOPICS.every((t) => statusForTopic(t) !== 'locked');
+  // Matches the real backend: every topic must itself be proven (not just
+  // reachable) before the boss door opens.
+  return TOPICS.every((t) => isProven(t));
 }
 
 function buildDungeon() {
@@ -279,7 +291,7 @@ export async function enterRoom(topic) {
     hint: q.hint,
     enemy_hp: state.combat.enemy_hp,
     enemy_hp_max: state.combat.enemy_hp_max,
-    enemy_name: isBoss ? 'The Big-O Devourer' : `${TOPIC_LABELS[topic]} Wraith`,
+    enemy_name: monsterForTopic(isBoss ? 'boss' : topic).name,
   };
 }
 
@@ -364,6 +376,7 @@ export async function submitAnswer({ question_id, player_answer, response_time_m
     acc.last_5_results = [...acc.last_5_results, verdict === 'correct'].slice(-5);
     acc.recent_accuracy =
       acc.last_5_results.filter(Boolean).length / Math.max(acc.last_5_results.length, 1);
+    if (acc.recent_accuracy > 0.65) acc.mastered = true;
   }
 
   state.scoreHistory.unshift({ score: Number(score.toFixed(2)), verdict, timestamp: new Date().toISOString() });
@@ -413,6 +426,7 @@ export async function getPlayer(_playerId) {
     attempts: state.accuracy[t]?.attempts ?? 0,
     correct: state.accuracy[t]?.correct ?? 0,
     recent_accuracy: state.accuracy[t]?.recent_accuracy ?? 0,
+    mastered: state.accuracy[t]?.mastered ?? false,
   }));
   return { ...withPowerupStatus(state.player), topic_accuracies, accuracy_history };
 }
@@ -526,10 +540,10 @@ export async function getLeaderboard() {
   await delay(MOCK_LATENCY.fast);
   const me = state.player;
   const board = [
-    { player_id: 'mock-ally-1', username: 'kavi_codes', total_xp: 980, streak_days: 6, level: 7 },
-    { player_id: 'mock-ally-2', username: 'priya_dev', total_xp: 740, streak_days: 3, level: 5 },
-    { player_id: 'mock-ally-3', username: 'theo_b', total_xp: 510, streak_days: 9, level: 4 },
-    { player_id: 'mock-ally-4', username: 'sana_q', total_xp: 320, streak_days: 1, level: 3 },
+    { player_id: 'mock-ally-1', username: 'kavi_codes', total_xp: 980, streak_days: 6, level: 7, hero_id: 'titan_warrior' },
+    { player_id: 'mock-ally-2', username: 'priya_dev', total_xp: 740, streak_days: 3, level: 5, hero_id: 'mindweave_mage' },
+    { player_id: 'mock-ally-3', username: 'theo_b', total_xp: 510, streak_days: 9, level: 4, hero_id: 'shadow_rogue' },
+    { player_id: 'mock-ally-4', username: 'sana_q', total_xp: 320, streak_days: 1, level: 3, hero_id: 'valkyrie_warrior' },
   ];
   if (me) {
     board.push({
@@ -538,6 +552,7 @@ export async function getLeaderboard() {
       total_xp: me.total_xp,
       streak_days: me.streak_days,
       level: me.level,
+      hero_id: me.hero_id,
     });
   }
   board.sort((a, b) => b.total_xp - a.total_xp);

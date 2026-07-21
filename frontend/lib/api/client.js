@@ -4,6 +4,7 @@
 import { API_BASE_URL, USE_MOCK } from '../config';
 import * as mock from '../mock/mockData';
 import { TOPIC_GRAPH, TOPIC_LABELS } from '../statMap';
+import { monsterForTopic } from '../sprites/monsterSprites';
 
 const SESSION_KEY = 'skillquest-api-session';
 
@@ -101,12 +102,27 @@ function accuracyMap(player) {
   );
 }
 
+// `mastered` is a one-way ratchet set server-side the first time a topic's
+// recent_accuracy ever crosses the unlock threshold -- room-unlock checks
+// must use this (or the current accuracy) rather than current accuracy
+// alone, or a later dip in the rolling recent_accuracy window would silently
+// re-lock a room the player already legitimately opened.
+function provenMap(player) {
+  return Object.fromEntries(
+    (player.accuracy_history || []).map((entry) => [
+      entry.topic,
+      Boolean(entry.mastered) || entry.recent_accuracy > 0.65,
+    ])
+  );
+}
+
 function normalizeDungeon(dungeon, player) {
   const accuracies = accuracyMap(player);
+  const proven = provenMap(player);
   const rooms = (dungeon.rooms || []).filter((room) => room.topic in TOPIC_GRAPH).map((room) => {
     const recentAccuracy = accuracies[room.topic] ?? 0;
     const prerequisites = TOPIC_GRAPH[room.topic] || [];
-    const isUnlocked = prerequisites.every((topic) => (accuracies[topic] ?? 0) > 0.65);
+    const isUnlocked = prerequisites.every((topic) => proven[topic]);
     let status = 'unlocked';
     if (!isUnlocked) status = 'locked';
     else if (recentAccuracy >= 0.9) status = 'mastered';
@@ -129,9 +145,7 @@ function normalizeDungeon(dungeon, player) {
     domain: dungeon.domain,
     rooms,
     next_topic: nextRoom?.topic ?? null,
-    boss_unlocked: Object.keys(TOPIC_GRAPH).every(
-      (topic) => (accuracies[topic] ?? 0) > 0.65
-    ),
+    boss_unlocked: Object.keys(TOPIC_GRAPH).every((topic) => proven[topic]),
   };
 }
 
@@ -227,7 +241,7 @@ export const game = {
         ...response.question,
         enemy_hp: enemyHp,
         enemy_hp_max: live.combat.enemyHpMax,
-        enemy_name: topic === 'boss' ? 'The Big-O Devourer' : `${TOPIC_LABELS[topic] || topic} Wraith`,
+        enemy_name: monsterForTopic(topic).name,
       };
     });
   },
