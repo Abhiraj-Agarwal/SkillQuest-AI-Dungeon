@@ -16,7 +16,7 @@ load_dotenv()
 # Gemini-only -- there is no provider-branching logic anywhere in this
 # codebase (unlike the README's original anthropic/openai-swappable design).
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-LLM_MODEL = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-flash-lite-latest")
 
 # --- Game config -------------------------------------------------------------
 DEFAULT_DOMAIN = os.getenv("DEFAULT_DOMAIN", "Data Structures & Algorithms")

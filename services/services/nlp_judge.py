@@ -6,6 +6,7 @@ expected_answer arrive directly in the request body -- this module never
 needs to look anything up itself.
 """
 
+import asyncio
 import re
 
 import numpy as np
@@ -24,6 +25,28 @@ def _get_model():
     if _model is None:
         _model = SentenceTransformer("all-MiniLM-L6-v2")
     return _model
+
+
+def _load_and_warm_model():
+    model = _get_model()
+    # Constructing SentenceTransformer only loads the weights -- the first
+    # real .encode() call still separately pays PyTorch/tokenizer JIT-style
+    # initialization cost. Run one throwaway encode here too so *that* cost
+    # also lands at startup, not on a player's first answer.
+    model.encode(["warm up"])
+    return model
+
+
+async def warm_up():
+    """
+    Fully warm the embedding path (model load + first-inference init) off the
+    event loop thread now, instead of paying for it on the request path.
+
+    Without this, the first real /ai/answer/judge call can take tens of
+    seconds -- the very first player of a session would see judging hang.
+    Call this once from main.py's startup lifespan instead.
+    """
+    await asyncio.to_thread(_load_and_warm_model)
 
 
 def _get_client():
@@ -111,6 +134,11 @@ async def _llm_fallback_verdict(
             config=types.GenerateContentConfig(
                 max_output_tokens=10,
                 temperature=0.0,
+                # Without an explicit timeout this call can hang far longer
+                # than a player will wait for "the judge to consider" --
+                # there's already a solid local fallback right below, so
+                # failing fast into it beats hanging on a slow/stuck request.
+                http_options=types.HttpOptions(timeout=8000),  # ms
             ),
         )
     except Exception:
@@ -159,7 +187,10 @@ async def judge_answer(player_answer: str, expected_answer: str, question: str) 
             "feedback": "No answer was submitted, so no credit can be given for this question.",
         }
 
-    embeddings = _get_model().encode([player_answer, expected_answer])
+    # SentenceTransformer.encode() is synchronous and CPU-bound; running it
+    # directly here would block the event loop (and every other in-flight
+    # request) for the duration of the embedding call.
+    embeddings = await asyncio.to_thread(_get_model().encode, [player_answer, expected_answer])
     score = _cosine_similarity(embeddings[0], embeddings[1])
 
     if config.JUDGE_FALLBACK_RANGE_LOW <= score <= config.JUDGE_FALLBACK_RANGE_HIGH:

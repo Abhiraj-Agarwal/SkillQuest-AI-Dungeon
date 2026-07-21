@@ -10,7 +10,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
-from services.knowledge_graph import get_next_topic
+from services.knowledge_graph import TOPIC_GRAPH, get_next_topic
 from services.llm_engine import QuestionGenerationError, generate_question
 from services.nlp_judge import judge_answer
 from services.rl_tuner import get_next_difficulty
@@ -65,6 +65,10 @@ class QuestionResponse(BaseModel):
 # CALLED BY: Person 2's backend in POST /game/room/enter
 @router.post("/question/generate", response_model=QuestionResponse)
 async def question_generate(payload: QuestionRequest) -> QuestionResponse:
+    # llm_engine.generate_question() explicitly documents that it does not
+    # validate the topic itself and defers that responsibility to this route.
+    if payload.topic not in TOPIC_GRAPH:
+        raise HTTPException(status_code=422, detail=f"Unknown topic: {payload.topic!r}")
     try:
         result = await generate_question(
             topic=payload.topic, difficulty=payload.difficulty, domain=payload.domain
