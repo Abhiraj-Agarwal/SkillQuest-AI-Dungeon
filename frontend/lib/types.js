@@ -1,7 +1,7 @@
 // JSDoc-only "types" — no TypeScript build step needed, but editors get
 // autocomplete + the whole team has one place that documents every shape
-// crossing the frontend/backend boundary. Keep in lockstep with
-// CodeCrypt_Frontend_Spec.md Section B whenever a contract changes.
+// crossing the frontend/backend boundary. Keep this in sync with the actual
+// FastAPI response shapes in backend/schemas/ whenever a contract changes.
 
 /**
  * @typedef {Object} Player

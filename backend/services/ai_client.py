@@ -1,5 +1,5 @@
 """
-AI client — routes AI calls to the /ai/ endpoints (mock or real, toggled by main.py).
+AI client — calls the Gemini-backed /ai/ endpoints (routes/ai_real.py).
 """
 import os
 import httpx
