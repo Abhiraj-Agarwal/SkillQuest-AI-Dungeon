@@ -42,6 +42,7 @@ export default function StatSheetPage() {
             <p className="font-body text-arcane text-base mt-0.5">
               {hero.name} <span className="text-parchment-dim">— {hero.powerupName}</span>
             </p>
+            <p className="font-body text-parchment-dim text-sm mt-1">{hero.powerupDescription}</p>
             <div className="flex gap-2 mt-2 flex-wrap">
               <PixelBadge tone="gold">🔥 {player.streak_days} day streak</PixelBadge>
               <PixelBadge tone="arcane">{player.hint_tokens} hints left</PixelBadge>

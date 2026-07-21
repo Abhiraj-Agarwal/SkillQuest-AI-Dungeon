@@ -108,3 +108,29 @@ def test_boss_requires_mastery_of_every_topic_room():
 def test_room_clear_requires_the_configured_number_of_answers():
     assert not check_room_clear(2, 3)
     assert check_room_clear(3, 3)
+
+
+def test_unlock_does_not_regress_after_a_later_accuracy_dip():
+    """The core fix for the 'unlocking feels glitchy' report: recent_accuracy
+    is a rolling last-5-answers window and can legitimately dip back below
+    the threshold later. Once `mastered` has been set, a room a player
+    already opened must never re-lock behind them because of it."""
+    db, dungeon, alpha, _beta, rooms = build_world()
+    try:
+        set_accuracy(db, alpha, "arrays", 0.8)
+        assert _is_room_unlocked_for_player(
+            db, alpha.player_id, rooms["linked_lists"], dungeon.dungeon_id
+        )
+
+        history = db.query(AccuracyHistory).filter_by(
+            player_id=alpha.player_id, topic="arrays"
+        ).one()
+        history.mastered = True
+        history.recent_accuracy = 0.2  # a bad run drags the rolling window down
+        db.commit()
+
+        assert _is_room_unlocked_for_player(
+            db, alpha.player_id, rooms["linked_lists"], dungeon.dungeon_id
+        )
+    finally:
+        db.close()

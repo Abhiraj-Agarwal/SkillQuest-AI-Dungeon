@@ -228,3 +228,117 @@ def test_hits_landed_never_exceeds_hits_required_even_with_stray_submissions(cli
         "/game/room/enter", json={"session_id": session_id, "room_id": room_id}
     ).json()
     assert entered_again["hits_landed"] <= entered_again["hits_required"]
+
+
+# ─── Audit: every one of the 6 hero powerups, end to end ───
+
+
+def test_force_correct_heal_queues_a_hit_and_heals_immediately(client):
+    """Freya Ironheart -- the other force_correct-family powerup, plus the
+    one immediate (non-queued) effect: heal_to_full."""
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=3)
+    player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
+    client.post(f"/game/player/{player_id}/hero", json={"hero_id": "valkyrie_warrior"})
+
+    powerup_resp = client.post("/game/powerup/use", json={"player_id": player_id})
+    assert powerup_resp.status_code == 200
+    body = powerup_resp.json()
+    assert body["queued"] is True
+    assert body["heal_to_full"] is True
+
+    client.verdict_box["verdict"] = "incorrect"
+    client.verdict_box["damage_multiplier"] = 0.0
+    _, result = _enter_and_submit(client, session_id, room_id, player_id, "wrong on purpose")
+    assert result["verdict"] == "correct"
+    assert result["hits_landed"] == 1
+
+
+def test_double_xp_next_exactly_doubles_the_next_answers_xp(client):
+    """Zephyr the Sage -- compared against an identical control run with no
+    powerup, rather than hand-deriving the XP formula's constants."""
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=3)
+    control_id, control_session = _register_and_start(client, "control", dungeon_id)
+    powered_id, powered_session = _register_and_start(client, "powered", dungeon_id)
+    client.post(f"/game/player/{powered_id}/hero", json={"hero_id": "sage_mage"})
+
+    client.verdict_box["verdict"] = "correct"
+    client.verdict_box["damage_multiplier"] = 2.0
+
+    # Control player never touches the powerup endpoint at all -- a clean,
+    # unmodified baseline to compare against.
+    powerup_resp = client.post("/game/powerup/use", json={"player_id": powered_id})
+    assert powerup_resp.status_code == 200
+    assert "queued" not in powerup_resp.json()  # immediate flag-set, not a queued hit
+
+    _, control_result = _enter_and_submit(client, control_session, room_id, control_id)
+    _, powered_result = _enter_and_submit(client, powered_session, room_id, powered_id)
+
+    assert powered_result["xp_gained"] == control_result["xp_gained"] * 2
+
+
+def test_verdict_boost_next_upgrades_incorrect_to_partial(client):
+    """Kael Shadowstep -- upgrades one tier; an incorrect answer should not
+    jump all the way to correct (that's Titan/Freya's job)."""
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=3)
+    player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
+    client.post(f"/game/player/{player_id}/hero", json={"hero_id": "shadow_rogue"})
+    client.post("/game/powerup/use", json={"player_id": player_id})
+
+    client.verdict_box["verdict"] = "incorrect"
+    client.verdict_box["damage_multiplier"] = 0.0
+    _, result = _enter_and_submit(client, session_id, room_id, player_id, "shaky answer")
+
+    assert result["verdict"] == "partial"
+    assert result["hits_landed"] == 0  # partial doesn't count toward room clear
+
+
+def test_free_hint_bonus_xp_reveals_hint_without_spending_a_token(client):
+    """Lyra Mindweave -- awards XP and the real hint text, and must not cost
+    a hint token the way /game/hint/use does."""
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=3)
+    player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
+    client.post(f"/game/player/{player_id}/hero", json={"hero_id": "mindweave_mage"})
+
+    before = client.get(f"/game/player/{player_id}").json()
+    entered = client.post("/game/room/enter", json={"session_id": session_id, "room_id": room_id}).json()
+    question_id = entered["question"]["question_id"]
+
+    resp = client.post("/game/powerup/use", json={"player_id": player_id, "question_id": question_id})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["xp_awarded"] == 20
+    assert body["hint_text"] == "a hint"  # matches fake_generate_question's fixed hint
+
+    after = client.get(f"/game/player/{player_id}").json()
+    assert after["hint_tokens"] == before["hint_tokens"]
+    assert after["total_xp"] == before["total_xp"] + 20
+
+
+def test_free_hint_bonus_xp_requires_a_question_id(client):
+    dungeon_id, _room_id = _make_dungeon_and_room(client)
+    player_id, _session_id = _register_and_start(client, "alpha", dungeon_id)
+    client.post(f"/game/player/{player_id}/hero", json={"hero_id": "mindweave_mage"})
+
+    resp = client.post("/game/powerup/use", json={"player_id": player_id})
+    assert resp.status_code == 422
+
+
+def test_refill_hints_restores_to_max_from_zero(client):
+    """Nyx Quickblade -- restores hint_tokens to the configured max
+    regardless of how depleted they were."""
+    dungeon_id, _room_id = _make_dungeon_and_room(client)
+    player_id, _session_id = _register_and_start(client, "alpha", dungeon_id)
+    client.post(f"/game/player/{player_id}/hero", json={"hero_id": "quickblade_rogue"})
+
+    db = client._SessionLocal()
+    player = db.query(Player).filter(Player.player_id == player_id).first()
+    player.hint_tokens = 0
+    db.commit()
+    db.close()
+
+    resp = client.post("/game/powerup/use", json={"player_id": player_id})
+    assert resp.status_code == 200
+    assert resp.json()["hint_tokens"] == game_routes.MAX_HINT_TOKENS
+
+    after = client.get(f"/game/player/{player_id}").json()
+    assert after["hint_tokens"] == game_routes.MAX_HINT_TOKENS

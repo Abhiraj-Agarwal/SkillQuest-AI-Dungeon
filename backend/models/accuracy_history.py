@@ -2,7 +2,7 @@
 AccuracyHistory SQLAlchemy model — tracks per-player, per-topic performance.
 """
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Integer, Float, DateTime, UniqueConstraint, JSON, ForeignKey
+from sqlalchemy import Boolean, Column, String, Integer, Float, DateTime, UniqueConstraint, JSON, ForeignKey
 from sqlalchemy.orm import relationship
 from db.database import Base
 
@@ -17,6 +17,12 @@ class AccuracyHistory(Base):
     correct = Column(Integer, default=0)
     recent_accuracy = Column(Float, default=0.0)
     last_5_results = Column(JSON, default=list)
+    # One-way ratchet: True forever once recent_accuracy has ever crossed the
+    # unlock threshold. Room-unlock checks must never regress a topic a
+    # player has already proven, or a bad run on an unrelated later question
+    # (last_5_results is a rolling window) would re-lock rooms they already
+    # legitimately opened -- see _is_room_unlocked_for_player in routes/game.py.
+    mastered = Column(Boolean, default=False)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
 

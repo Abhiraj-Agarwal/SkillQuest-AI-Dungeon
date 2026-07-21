@@ -1,9 +1,9 @@
 // The single browser-to-backend boundary. Components and stores consume the
 // stable frontend view models below and never depend on FastAPI wire shapes.
 
-import { API_BASE_URL, USE_MOCK } from '../config';
-import * as mock from '../mock/mockData';
+import { API_BASE_URL } from '../config';
 import { TOPIC_GRAPH, TOPIC_LABELS } from '../statMap';
+import { monsterForTopic } from '../sprites/monsterSprites';
 
 const SESSION_KEY = 'skillquest-api-session';
 
@@ -101,12 +101,27 @@ function accuracyMap(player) {
   );
 }
 
+// `mastered` is a one-way ratchet set server-side the first time a topic's
+// recent_accuracy ever crosses the unlock threshold -- room-unlock checks
+// must use this (or the current accuracy) rather than current accuracy
+// alone, or a later dip in the rolling recent_accuracy window would silently
+// re-lock a room the player already legitimately opened.
+function provenMap(player) {
+  return Object.fromEntries(
+    (player.accuracy_history || []).map((entry) => [
+      entry.topic,
+      Boolean(entry.mastered) || entry.recent_accuracy > 0.65,
+    ])
+  );
+}
+
 function normalizeDungeon(dungeon, player) {
   const accuracies = accuracyMap(player);
+  const proven = provenMap(player);
   const rooms = (dungeon.rooms || []).filter((room) => room.topic in TOPIC_GRAPH).map((room) => {
     const recentAccuracy = accuracies[room.topic] ?? 0;
     const prerequisites = TOPIC_GRAPH[room.topic] || [];
-    const isUnlocked = prerequisites.every((topic) => (accuracies[topic] ?? 0) > 0.65);
+    const isUnlocked = prerequisites.every((topic) => proven[topic]);
     let status = 'unlocked';
     if (!isUnlocked) status = 'locked';
     else if (recentAccuracy >= 0.9) status = 'mastered';
@@ -129,9 +144,7 @@ function normalizeDungeon(dungeon, player) {
     domain: dungeon.domain,
     rooms,
     next_topic: nextRoom?.topic ?? null,
-    boss_unlocked: Object.keys(TOPIC_GRAPH).every(
-      (topic) => (accuracies[topic] ?? 0) > 0.65
-    ),
+    boss_unlocked: Object.keys(TOPIC_GRAPH).every((topic) => proven[topic]),
   };
 }
 
@@ -164,35 +177,26 @@ async function startDungeonSession(requestedDungeonId) {
 
 export const auth = {
   register: (username) =>
-    USE_MOCK
-      ? mock.register(username)
-      : request('/game/player/create', { method: 'POST', body: { username } }).then(rememberPlayer),
+    request('/game/player/create', { method: 'POST', body: { username } }).then(rememberPlayer),
 
   login: (username) =>
-    USE_MOCK
-      ? mock.login(username)
-      : request(`/game/player/by-username/${encodeURIComponent(username)}`).then(rememberPlayer),
+    request(`/game/player/by-username/${encodeURIComponent(username)}`).then(rememberPlayer),
 
   logout: async () => {
-    if (USE_MOCK) return mock.logout();
     clearLiveState();
     return { ok: true };
   },
 
-  me: async () => (USE_MOCK ? mock.me() : rememberPlayer(await currentPlayer())),
+  me: async () => rememberPlayer(await currentPlayer()),
 
   setHero: async (playerId, heroId) =>
-    USE_MOCK
-      ? mock.setHero(playerId, heroId)
-      : request(`/game/player/${playerId}/hero`, { method: 'POST', body: { hero_id: heroId } }),
+    request(`/game/player/${playerId}/hero`, { method: 'POST', body: { hero_id: heroId } }),
 };
 
 export const game = {
-  getDungeon: (dungeonId) =>
-    USE_MOCK ? mock.getDungeon(dungeonId) : startDungeonSession(dungeonId),
+  getDungeon: (dungeonId) => startDungeonSession(dungeonId),
 
   enterRoom: async (topic) => {
-    if (USE_MOCK) return mock.enterRoom(topic);
     // Each call to enterRoom(topic) triggers a real (potentially multi-second)
     // Gemini question-generation round trip -- collapse duplicate concurrent
     // calls for the same topic into one.
@@ -227,13 +231,12 @@ export const game = {
         ...response.question,
         enemy_hp: enemyHp,
         enemy_hp_max: live.combat.enemyHpMax,
-        enemy_name: topic === 'boss' ? 'The Big-O Devourer' : `${TOPIC_LABELS[topic] || topic} Wraith`,
+        enemy_name: monsterForTopic(topic).name,
       };
     });
   },
 
   submitAnswer: async (payload) => {
-    if (USE_MOCK) return mock.submitAnswer(payload);
     const player = await currentPlayer();
     const result = await request('/game/answer/submit', {
       method: 'POST',
@@ -255,21 +258,17 @@ export const game = {
   },
 
   getPlayer: async (playerId) => {
-    if (USE_MOCK) return mock.getPlayer(playerId);
     const player = await request(`/game/player/${playerId}`);
     return { ...player, topic_accuracies: accuracyMap(player) };
   },
 
-  useHint: async (playerId, questionId) => {
-    if (USE_MOCK) return mock.useHint(playerId, questionId);
-    return request('/game/hint/use', {
+  useHint: async (playerId, questionId) =>
+    request('/game/hint/use', {
       method: 'POST',
       body: { player_id: playerId, question_id: questionId },
-    });
-  },
+    }),
 
   joinGuildRaid: async (guildId) => {
-    if (USE_MOCK) return mock.joinGuildRaid(guildId);
     const player = await currentPlayer();
     let activeGuildId = guildId || player.guild_id;
     if (!activeGuildId) {
@@ -299,18 +298,15 @@ export const game = {
     };
   },
 
-  getLeaderboard: async () =>
-    USE_MOCK ? mock.getLeaderboard() : { leaderboard: await request('/game/leaderboard') },
+  getLeaderboard: async () => ({ leaderboard: await request('/game/leaderboard') }),
 
   respawn: async () => {
-    if (USE_MOCK) return mock.respawn();
     live.combat = null;
     persistLiveState();
     return { ok: true };
   },
 
   usePowerup: async (playerId, questionId) => {
-    if (USE_MOCK) return mock.usePowerup(playerId, questionId);
     const result = await request('/game/powerup/use', {
       method: 'POST',
       body: { player_id: playerId, question_id: questionId },
@@ -329,7 +325,6 @@ export const game = {
 
 export const ai = {
   getDashboard: async (playerId) => {
-    if (USE_MOCK) return mock.getDashboard(playerId);
     const data = await request(`/ai/dashboard/${playerId}`);
     const nodes = Object.entries(TOPIC_GRAPH).map(([topic]) => ({
       id: topic,

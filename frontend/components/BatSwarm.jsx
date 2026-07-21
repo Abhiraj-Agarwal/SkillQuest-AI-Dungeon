@@ -7,10 +7,10 @@ import { BAT_FRAMES, BAT_PALETTE } from '@/lib/sprites/batSprite';
 
 // A real swarm, not the occasional lone bat -- lots of these on screen
 // constantly. Each one is just a cached 10-11KB PNG + a motion.div, so even
-// 15 concurrent bats is cheap.
-const MAX_CONCURRENT_BATS = 15;
-const MIN_SPAWN_MS = 250;
-const MAX_SPAWN_MS = 700;
+// 30 concurrent bats is cheap.
+const MAX_CONCURRENT_BATS = 30;
+const MIN_SPAWN_MS = 120;
+const MAX_SPAWN_MS = 350;
 const FIRST_SPAWN_MS = 150;
 const FLAP_MS = 160;
 

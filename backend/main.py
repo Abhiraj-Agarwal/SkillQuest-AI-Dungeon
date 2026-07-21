@@ -37,6 +37,9 @@ async def lifespan(app: FastAPI):
         ("powerup_window_start", "TEXT"),
         ("powerup_uses_this_window", "INTEGER DEFAULT 0"),
     ])
+    ensure_columns("accuracy_history", [
+        ("mastered", "BOOLEAN DEFAULT 0"),
+    ])
 
     # Auto-seed the demo dungeon
     from db.seed import seed_database
@@ -94,15 +97,7 @@ app.add_middleware(RequestLoggingMiddleware)
 
 # Import and include routers
 from routes.game import router as game_router
-
-USE_MOCK_AI = os.getenv("USE_MOCK_AI", "true").lower() == "true"
-
-if USE_MOCK_AI:
-    from routes.ai_mock import router as ai_router
-    print("Using MOCK AI endpoints")
-else:
-    from routes.ai_real import router as ai_router
-    print("Using REAL Gemini AI endpoints")
+from routes.ai_real import router as ai_router
 
 app.include_router(game_router)
 app.include_router(ai_router)

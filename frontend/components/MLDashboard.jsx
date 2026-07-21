@@ -52,7 +52,7 @@ function GraphChainOverlay({ positions, edges }) {
         if (!from || !to) return null;
         const a = toScreen(from);
         const b = toScreen(to);
-        return <ChainLink key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} linkSize={Math.max(6, 14 * zoom)} />;
+        return <ChainLink key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} thickness={Math.max(8, 16 * zoom)} />;
       })}
     </svg>
   );

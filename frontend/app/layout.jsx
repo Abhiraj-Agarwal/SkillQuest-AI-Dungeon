@@ -4,6 +4,7 @@ import Providers from './providers';
 import NavBar from '@/components/NavBar';
 import BatSwarm from '@/components/BatSwarm';
 import OnboardingModal from '@/components/OnboardingModal';
+import MusicPlayer from '@/components/MusicPlayer';
 
 const pressStart = Press_Start_2P({
   subsets: ['latin'],
@@ -30,6 +31,7 @@ export default function RootLayout({ children }) {
       <body>
         <div className="torch-flicker" aria-hidden="true" />
         <BatSwarm />
+        <MusicPlayer />
         <Providers>
           <NavBar />
           <main className="max-w-6xl mx-auto px-4 py-6">{children}</main>

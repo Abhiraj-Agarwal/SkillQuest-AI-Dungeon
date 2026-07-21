@@ -97,7 +97,7 @@ export default function DungeonMapPage() {
                   y1={from.y + tile / 2}
                   x2={to.x + offsetX + tile / 2}
                   y2={to.y + tile / 2}
-                  linkSize={22}
+                  thickness={20}
                 />
               );
             })}
