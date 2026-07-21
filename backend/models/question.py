@@ -20,4 +20,4 @@ class Question(Base):
     question_text = Column(String, nullable=False)
     expected_answer = Column(String, nullable=False)
     hint = Column(String, nullable=True)
-    generated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    generated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))

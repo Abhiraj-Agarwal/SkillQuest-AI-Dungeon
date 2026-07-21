@@ -17,7 +17,7 @@ class AccuracyHistory(Base):
     correct = Column(Integer, default=0)
     recent_accuracy = Column(Float, default=0.0)
     last_5_results = Column(JSON, default=list)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc),
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
 
     __table_args__ = (

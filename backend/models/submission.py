@@ -23,7 +23,7 @@ class AnswerSubmission(Base):
     damage_multiplier = Column(Float, default=0.0)
     verdict = Column(String, nullable=False)  # correct | partial | incorrect
     response_time_ms = Column(Integer, default=0)
-    submitted_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    submitted_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     player = relationship("Player", back_populates="submissions")

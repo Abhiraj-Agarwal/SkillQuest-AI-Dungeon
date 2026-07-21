@@ -5,7 +5,7 @@ import os
 import uuid
 import json
 import re
-import time
+import asyncio
 from fastapi import APIRouter
 from dotenv import load_dotenv
 import google.generativeai as genai
@@ -14,7 +14,7 @@ load_dotenv()
 
 # Configure Gemini
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel(os.getenv("LLM_MODEL", "gemini-2.0-flash"))
+model = genai.GenerativeModel(os.getenv("LLM_MODEL", "gemini-flash-lite-latest"))
 
 router = APIRouter(prefix="/ai", tags=["AI (Gemini)"])
 
@@ -31,23 +31,33 @@ def _parse_json_from_response(text: str) -> dict:
     return json.loads(text.strip())
 
 
-def _call_gemini_with_retry(prompt: str, max_retries: int = 3) -> str:
-    """Call Gemini with exponential backoff on rate-limit (429) errors."""
+async def _call_gemini_with_retry(prompt: str, max_retries: int = 3) -> str:
+    """Call Gemini with exponential backoff on rate-limit (429) errors.
+
+    The Gemini SDK call itself is synchronous/blocking; running it directly
+    inside an async route handler would freeze the whole event loop (every
+    other in-flight request) for the duration of the call and any retry
+    backoff. `asyncio.to_thread` runs it on a worker thread instead.
+    """
     for attempt in range(max_retries):
         try:
-            response = model.generate_content(prompt)
+            response = await asyncio.to_thread(model.generate_content, prompt)
             return response.text
         except Exception as e:
             error_str = str(e)
-            is_rate_limit = "429" in error_str or "ResourceExhausted" in error_str
+            # A per-day quota (the free tier's usual cap) cannot recover
+            # within a 15-45s retry loop -- fail immediately instead of
+            # burning that time on retries that cannot succeed.
+            is_daily_quota = "PerDay" in error_str
+            is_rate_limit = not is_daily_quota and ("429" in error_str or "ResourceExhausted" in error_str)
             if is_rate_limit and attempt < max_retries - 1:
                 wait_time = (attempt + 1) * 15  # 15s, 30s backoff
                 print(f"[AI] Rate limited (attempt {attempt + 1}), waiting {wait_time}s...")
-                time.sleep(wait_time)
+                await asyncio.sleep(wait_time)
             else:
                 print(f"[AI] Gemini call failed (attempt {attempt + 1}): {type(e).__name__}: {error_str[:200]}")
                 if attempt < max_retries - 1:
-                    time.sleep(2)
+                    await asyncio.sleep(2)
                 else:
                     raise
 
@@ -78,7 +88,7 @@ Respond in JSON only, no preamble:
 }}"""
 
     try:
-        text = _call_gemini_with_retry(prompt)
+        text = await _call_gemini_with_retry(prompt)
         data = _parse_json_from_response(text)
 
         if "question" not in data or "expected_answer" not in data:
@@ -138,7 +148,7 @@ Respond in JSON only:
 }}"""
 
     try:
-        text = _call_gemini_with_retry(prompt)
+        text = await _call_gemini_with_retry(prompt)
         data = _parse_json_from_response(text)
 
         verdict = data.get("verdict", "incorrect")
@@ -161,10 +171,13 @@ Respond in JSON only:
         expected_words = set(expected_answer.lower().split())
         overlap = len(player_words & expected_words) / max(len(expected_words), 1)
 
-        if overlap >= 0.5:
+        correct_threshold = float(os.getenv("JUDGE_CORRECT_THRESHOLD", "0.65"))
+        partial_threshold = float(os.getenv("JUDGE_PARTIAL_THRESHOLD", "0.30"))
+
+        if overlap >= correct_threshold:
             return {"score": round(overlap, 2), "damage_multiplier": 2.0,
                     "verdict": "correct", "feedback": "Good answer!"}
-        elif overlap >= 0.2:
+        elif overlap >= partial_threshold:
             return {"score": round(overlap, 2), "damage_multiplier": 1.0,
                     "verdict": "partial", "feedback": "Partially correct."}
         else:

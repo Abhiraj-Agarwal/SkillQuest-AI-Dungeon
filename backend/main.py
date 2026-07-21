@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from db.database import engine, Base
+from db.database import engine, Base, ensure_columns
 
 # Import all models so tables are registered with Base.metadata
 from models.player import Player
@@ -26,6 +26,17 @@ async def lifespan(app: FastAPI):
     """Create all tables on startup, seed demo data."""
     Base.metadata.create_all(bind=engine)
     print("Database tables created.")
+
+    # Phase 2/3 columns added to an existing players table after the demo DB
+    # was first created -- create_all() above never alters existing tables.
+    ensure_columns("players", [
+        ("hero_id", "TEXT"),
+        ("pending_xp_multiplier", "REAL DEFAULT 1.0"),
+        ("pending_verdict_boost", "BOOLEAN DEFAULT 0"),
+        ("pending_force_correct", "BOOLEAN DEFAULT 0"),
+        ("powerup_window_start", "TEXT"),
+        ("powerup_uses_this_window", "INTEGER DEFAULT 0"),
+    ])
 
     # Auto-seed the demo dungeon
     from db.seed import seed_database
@@ -44,7 +55,13 @@ app = FastAPI(
 frontend_origins = [
     origin.strip()
     for origin in os.getenv(
-        "FRONTEND_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+        # :3001 included too -- `next dev` silently falls back to it whenever
+        # another process (often a stale dev server from a previous session)
+        # is still squatting :3000, and a CORS-rejected preflight ("Could not
+        # reach the backend") is a much more confusing failure than just
+        # trusting both ports up front.
+        "FRONTEND_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001",
     ).split(",")
     if origin.strip()
 ]

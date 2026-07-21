@@ -19,7 +19,7 @@ class GameSession(Base):
     player_id = Column(String, ForeignKey("players.player_id"), nullable=False)
     dungeon_id = Column(String, ForeignKey("dungeons.dungeon_id"), nullable=False)
     current_room_id = Column(String, nullable=True)
-    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    started_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     status = Column(String, default="active")  # active | completed | abandoned
 
     # Relationships

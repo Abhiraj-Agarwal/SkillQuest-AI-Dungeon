@@ -26,3 +26,5 @@ class AnswerSubmitResponse(BaseModel):
     room_cleared: bool = False
     new_level: Optional[int] = None
     dungeon_completed: bool = False
+    hits_required: Optional[int] = None
+    hits_landed: Optional[int] = None

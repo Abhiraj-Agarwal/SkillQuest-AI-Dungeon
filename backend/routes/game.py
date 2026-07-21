@@ -1,10 +1,13 @@
 """
 Game routes — all /game/ endpoints owned by P2.
 """
+import os
 import uuid
 import random
-from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+import httpx
+from datetime import datetime, timedelta, timezone
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from db.database import get_db
@@ -15,7 +18,7 @@ from models.question import Question
 from models.submission import AnswerSubmission
 from models.accuracy_history import AccuracyHistory
 from models.guild import Guild
-from schemas.player import PlayerCreate, PlayerResponse
+from schemas.player import PlayerCreate
 from schemas.dungeon import (
     DungeonResponse, SessionStartRequest, SessionStartResponse,
     RoomEnterRequest, RoomEnterResponse,
@@ -29,13 +32,18 @@ from services.game_logic import (
     check_dungeon_complete,
 )
 from services.ai_client import call_generate_question, call_judge_answer, call_next_difficulty, call_next_topic
+from services.heroes import (
+    HEROES, DEFAULT_HERO_ID, POWERUP_MAX_USES_PER_WINDOW, POWERUP_WINDOW_HOURS, hero_or_default,
+)
 
 router = APIRouter(prefix="/game", tags=["Game"])
+
+MAX_HINT_TOKENS = int(os.getenv("MAX_HINT_TOKENS", "3"))
 
 
 # ─── Player Management ───
 
-@router.post("/player/create", response_model=PlayerResponse)
+@router.post("/player/create")
 async def create_player(body: PlayerCreate, db: Session = Depends(get_db)):
     existing = db.query(Player).filter(Player.username == body.username).first()
     if existing:
@@ -44,7 +52,76 @@ async def create_player(body: PlayerCreate, db: Session = Depends(get_db)):
     db.add(player)
     db.commit()
     db.refresh(player)
-    return player
+    # A brand-new player has no accuracy_history rows yet (those are created
+    # in start_session) -- pass [] rather than querying for rows that can't
+    # exist. Serialized via _serialize_player (not response_model=PlayerResponse)
+    # so hero_id/powerup fields aren't silently stripped from the response.
+    return _serialize_player(player, [])
+
+
+def _as_utc(dt: datetime | None) -> datetime | None:
+    """SQLite doesn't reliably round-trip tzinfo through DateTime(timezone=True)
+    -- a value written as UTC can come back naive on the next request's fresh
+    query. Every powerup_window_start value this app ever writes is UTC
+    (datetime.now(timezone.utc)), so a naive read is safely assumed UTC too."""
+    if dt is not None and dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
+def _powerup_status(player: Player) -> dict:
+    """Read-only view of the cooldown window -- does not mutate/reset it.
+    The actual reset-on-expiry write only happens in use_powerup(), which is
+    the only place a stale window matters."""
+    now = datetime.now(timezone.utc)
+    window_start = _as_utc(player.powerup_window_start)
+    window_active = (
+        window_start is not None
+        and (now - window_start).total_seconds() < POWERUP_WINDOW_HOURS * 3600
+    )
+    uses = player.powerup_uses_this_window or 0 if window_active else 0
+    return {
+        # Deliberately NOT defaulted to DEFAULT_HERO_ID here: the frontend's
+        # register/login redirect uses "is hero_id set?" to decide whether to
+        # send a new player to character-select. hero_or_default() (used by
+        # use_powerup, and by the frontend's own heroOrDefault() for display)
+        # is the right place for the "no hero chosen yet" fallback, not here.
+        "hero_id": player.hero_id,
+        "powerup_uses_remaining": max(0, POWERUP_MAX_USES_PER_WINDOW - uses),
+        "powerup_resets_at": (
+            (window_start + timedelta(hours=POWERUP_WINDOW_HOURS)).isoformat()
+            if window_active else None
+        ),
+    }
+
+
+def _room_correct_count(db: Session, player_id: str, topic: str) -> int:
+    """Correct-answer count for a topic's room -- the single source of truth
+    both room/enter and answer/submit use to drive the villain's HP bar, so
+    the bar and the actual room_cleared condition can never disagree."""
+    return db.query(AnswerSubmission).join(Question).filter(
+        AnswerSubmission.player_id == player_id, Question.topic == topic,
+        AnswerSubmission.verdict == "correct",
+    ).count()
+
+
+def _serialize_player(player: Player, histories: list[AccuracyHistory]) -> dict:
+    return {
+        "player_id": player.player_id, "username": player.username,
+        "level": player.level, "total_xp": player.total_xp,
+        "streak_days": player.streak_days,
+        "last_active": player.last_active.isoformat() if player.last_active else None,
+        "guild_id": player.guild_id,
+        # Clamp defensively: hint_tokens can be storing a value from before
+        # MAX_HINT_TOKENS was enforced on writes (e.g. this repo's seeded demo
+        # player). Clamping on read fixes the display without a DB migration.
+        "hint_tokens": min(player.hint_tokens, MAX_HINT_TOKENS),
+        "accuracy_history": [
+            {"topic": h.topic, "attempts": h.attempts, "correct": h.correct, "recent_accuracy": h.recent_accuracy}
+            for h in histories
+        ],
+        **_powerup_status(player),
+    }
 
 
 @router.get("/player/{player_id}")
@@ -53,17 +130,7 @@ async def get_player(player_id: str, db: Session = Depends(get_db)):
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
     histories = db.query(AccuracyHistory).filter(AccuracyHistory.player_id == player_id).all()
-    return {
-        "player_id": player.player_id, "username": player.username,
-        "level": player.level, "total_xp": player.total_xp,
-        "streak_days": player.streak_days,
-        "last_active": player.last_active.isoformat() if player.last_active else None,
-        "guild_id": player.guild_id, "hint_tokens": player.hint_tokens,
-        "accuracy_history": [
-            {"topic": h.topic, "attempts": h.attempts, "correct": h.correct, "recent_accuracy": h.recent_accuracy}
-            for h in histories
-        ],
-    }
+    return _serialize_player(player, histories)
 
 
 @router.get("/player/by-username/{username}")
@@ -73,17 +140,110 @@ async def get_player_by_username(username: str, db: Session = Depends(get_db)):
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
     histories = db.query(AccuracyHistory).filter(AccuracyHistory.player_id == player.player_id).all()
-    return {
-        "player_id": player.player_id, "username": player.username,
-        "level": player.level, "total_xp": player.total_xp,
-        "streak_days": player.streak_days,
-        "last_active": player.last_active.isoformat() if player.last_active else None,
-        "guild_id": player.guild_id, "hint_tokens": player.hint_tokens,
-        "accuracy_history": [
-            {"topic": h.topic, "attempts": h.attempts, "correct": h.correct, "recent_accuracy": h.recent_accuracy}
-            for h in histories
-        ],
+    return _serialize_player(player, histories)
+
+
+# ─── Character selection ───
+
+@router.post("/player/{player_id}/hero")
+async def select_hero(player_id: str, body: dict, db: Session = Depends(get_db)):
+    hero_id = body.get("hero_id")
+    if hero_id not in HEROES:
+        raise HTTPException(status_code=422, detail=f"Unknown hero: {hero_id!r}")
+    player = db.query(Player).filter(Player.player_id == player_id).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    player.hero_id = hero_id
+    db.commit()
+    return {"hero_id": hero_id}
+
+
+# ─── Powerups ───
+
+@router.post("/powerup/use")
+async def use_powerup(body: dict, db: Session = Depends(get_db)):
+    """
+    Apply the player's chosen hero's powerup, subject to a rolling
+    POWERUP_MAX_USES_PER_WINDOW-per-POWERUP_WINDOW_HOURS cooldown persisted on
+    the player row (so it survives refresh/logout, same as hint_tokens).
+
+    Every effect mutates server-authoritative state directly here (XP,
+    hint_tokens, or a "pending" flag consumed by the next /answer/submit
+    call) -- including force_correct/force_correct_heal, which queue a
+    guaranteed-correct verdict for the player's next submission rather than
+    poking an arbitrary client-side HP number. This keeps the villain's HP
+    bar (hits_required/hits_landed, computed from real AnswerSubmission rows)
+    as the single source of truth, in sync with the real room-clear
+    condition. heal_to_full is the one exception: player HP during a fight
+    has no server-side pool at all (see enter_room's flat difficulty-based
+    enemy_hp for the enemy side's equivalent), so it's still returned as an
+    instruction for the frontend to apply to its own client-tracked HP.
+    """
+    player_id = body.get("player_id")
+    question_id = body.get("question_id")
+    player = db.query(Player).filter(Player.player_id == player_id).first()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    hero = hero_or_default(player.hero_id)
+
+    now = datetime.now(timezone.utc)
+    window_start = _as_utc(player.powerup_window_start)
+    window_expired = (
+        window_start is None
+        or (now - window_start).total_seconds() >= POWERUP_WINDOW_HOURS * 3600
+    )
+    if window_expired:
+        player.powerup_window_start = now
+        player.powerup_uses_this_window = 0
+        window_start = now
+
+    if player.powerup_uses_this_window >= POWERUP_MAX_USES_PER_WINDOW:
+        resets_at = window_start + timedelta(hours=POWERUP_WINDOW_HOURS)
+        raise HTTPException(
+            status_code=429,
+            detail=f"{hero['powerup_name']} is on cooldown until {resets_at.isoformat()}.",
+        )
+
+    response = {
+        "hero_id": player.hero_id or DEFAULT_HERO_ID,
+        "powerup_name": hero["powerup_name"],
+        "effect": hero["effect"],
     }
+
+    effect = hero["effect"]
+    if effect == "force_correct":
+        player.pending_force_correct = True
+        response["queued"] = True
+    elif effect == "force_correct_heal":
+        player.pending_force_correct = True
+        response["queued"] = True
+        response["heal_to_full"] = True
+    elif effect == "double_xp_next":
+        player.pending_xp_multiplier = 2.0
+    elif effect == "verdict_boost_next":
+        player.pending_verdict_boost = True
+    elif effect == "free_hint_bonus_xp":
+        if not question_id:
+            raise HTTPException(status_code=422, detail="question_id is required for this powerup")
+        question = db.query(Question).filter(Question.question_id == question_id).first()
+        if not question:
+            raise HTTPException(status_code=404, detail="Question not found")
+        xp = hero["xp"]
+        player.total_xp += xp
+        player.level = calculate_level(player.total_xp)
+        response["hint_text"] = question.hint
+        response["xp_awarded"] = xp
+    elif effect == "refill_hints":
+        player.hint_tokens = MAX_HINT_TOKENS
+        response["hint_tokens"] = player.hint_tokens
+
+    player.powerup_uses_this_window += 1
+    db.commit()
+
+    response["powerup_uses_remaining"] = POWERUP_MAX_USES_PER_WINDOW - player.powerup_uses_this_window
+    response["powerup_resets_at"] = (window_start + timedelta(hours=POWERUP_WINDOW_HOURS)).isoformat()
+    return response
 
 
 # ─── Dungeon & Session ───
@@ -132,6 +292,12 @@ async def start_session(body: SessionStartRequest, db: Session = Depends(get_db)
     player.streak_days = new_streak
     player.last_active = new_last
 
+    # Only one session should be "active" per player, or submit_answer's
+    # unscoped active-session lookup can pick a stale one.
+    db.query(GameSession).filter(
+        GameSession.player_id == body.player_id, GameSession.status == "active"
+    ).update({"status": "abandoned"})
+
     first_room = db.query(Room).filter(
         Room.dungeon_id == dungeon.dungeon_id, Room.is_unlocked == True
     ).order_by(Room.order_index).first()
@@ -179,25 +345,35 @@ async def enter_room(body: RoomEnterRequest, db: Session = Depends(get_db)):
             AccuracyHistory.player_id == session.player_id
         ).all()
         accuracy_map = {h.topic: h.recent_accuracy for h in histories}
-        difficulty_data = await call_next_difficulty(session.player_id, room.topic, accuracy_map)
+        try:
+            difficulty_data = await call_next_difficulty(session.player_id, room.topic, accuracy_map)
+        except httpx.HTTPError:
+            difficulty_data = {}
         difficulty = difficulty_data.get("difficulty", "medium")
         question_topic = room.topic
 
-    question_data = await call_generate_question(session.player_id, question_topic, difficulty, domain)
+    try:
+        question_data = await call_generate_question(session.player_id, question_topic, difficulty, domain)
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="The question generator is unreachable. Try again.")
     question = Question(
-        question_id=question_data["question_id"], topic=room.topic, difficulty=difficulty,
-        question_text=question_data["question"], expected_answer=question_data["expected_answer"],
+        question_id=question_data.get("question_id", str(uuid.uuid4())), topic=room.topic, difficulty=difficulty,
+        question_text=question_data.get("question", "Describe this concept."),
+        expected_answer=question_data.get("expected_answer", ""),
         hint=question_data.get("hint", ""),
     )
     db.add(question)
     db.commit()
 
     enemy_hp = {"easy": 50, "medium": 100, "hard": 150}.get(difficulty, 100)
+    hits_landed = min(room.enemy_count, _room_correct_count(db, session.player_id, room.topic))
     return RoomEnterResponse(
         room=room,
         question={"question_id": question.question_id, "question": question.question_text,
                   "hint": question.hint, "topic": question.topic, "difficulty": question.difficulty},
         enemy_hp=enemy_hp,
+        hits_required=room.enemy_count,
+        hits_landed=hits_landed,
     )
 
 
@@ -212,9 +388,40 @@ async def submit_answer(body: AnswerSubmitRequest, db: Session = Depends(get_db)
     if not question:
         raise HTTPException(status_code=404, detail="Question not found")
 
-    judge = await call_judge_answer(body.question_id, body.player_answer, question.expected_answer)
-    score, damage_multiplier, verdict = judge["score"], judge["damage_multiplier"], judge["verdict"]
+    # Each generated question is meant to be answered exactly once. Without this
+    # guard, a retried/double-clicked request replays XP, damage, and room-clear
+    # progress for the same question every time it is resubmitted.
+    already_answered = db.query(AnswerSubmission).filter(
+        AnswerSubmission.question_id == body.question_id
+    ).first()
+    if already_answered:
+        raise HTTPException(status_code=409, detail="This question has already been answered")
+
+    try:
+        judge = await call_judge_answer(body.question_id, body.player_answer, question.expected_answer)
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="The judge is unreachable. Try again.")
+    score = judge.get("score", 0.0)
+    damage_multiplier = judge.get("damage_multiplier", 0.0)
+    verdict = judge.get("verdict", "incorrect")
     feedback = judge.get("feedback", "")
+
+    # Consume a pending Titan's Smash/Valkyrie's Charge-style powerup: forces
+    # this answer to land as a correct critical hit outright, regardless of
+    # what the judge actually said. Checked before the Shadow Step boost
+    # since a forced correct is already the strongest possible outcome.
+    if player.pending_force_correct:
+        verdict = "correct"
+        damage_multiplier = 2.0
+        player.pending_force_correct = False
+    # Consume a pending Shadow Step-style powerup: bumps this answer's verdict
+    # up one tier before anything else (XP, damage, accuracy history) is
+    # computed from it, so the whole rest of the pipeline sees the boosted
+    # verdict consistently.
+    elif player.pending_verdict_boost:
+        verdict = {"incorrect": "partial", "partial": "correct"}.get(verdict, verdict)
+        damage_multiplier = {"correct": 2.0, "partial": 1.0, "incorrect": 0.0}[verdict]
+        player.pending_verdict_boost = False
 
     xp_gained = calculate_xp(question.difficulty, verdict, body.response_time_ms)
 
@@ -222,11 +429,15 @@ async def submit_answer(body: AnswerSubmitRequest, db: Session = Depends(get_db)
     streak_bonus = calculate_streak_bonus(player.streak_days) if verdict in ("correct", "partial") else 0
     xp_gained += streak_bonus
 
+    # Consume a pending Arcane Surge-style powerup.
+    if player.pending_xp_multiplier and player.pending_xp_multiplier != 1.0:
+        xp_gained = int(xp_gained * player.pending_xp_multiplier)
+        player.pending_xp_multiplier = 1.0
+
     damage_dealt = calculate_damage(damage_multiplier, player.level)
+    original_level = player.level
     player.total_xp += xp_gained
-    old_level = player.level
     player.level = calculate_level(player.total_xp)
-    new_level = player.level if player.level > old_level else None
 
     old_streak = player.streak_days
     new_streak, new_last = update_streak(player.last_active, player.streak_days)
@@ -235,7 +446,7 @@ async def submit_answer(body: AnswerSubmitRequest, db: Session = Depends(get_db)
 
     # Hint replenishment: +1 token every time streak crosses a multiple of 5
     if new_streak > 0 and new_streak % 5 == 0 and old_streak < new_streak:
-        player.hint_tokens += 1
+        player.hint_tokens = min(MAX_HINT_TOKENS, player.hint_tokens + 1)
 
     # *** CRITICAL: Update accuracy_history ***
     acc = db.query(AccuracyHistory).filter(
@@ -265,31 +476,33 @@ async def submit_answer(body: AnswerSubmitRequest, db: Session = Depends(get_db)
     # Check room clear
     room_cleared = False
     dungeon_completed = False
+    hits_required = None
+    hits_landed = None
     active_session = db.query(GameSession).filter(
         GameSession.player_id == body.player_id, GameSession.status == "active"
-    ).first()
+    ).order_by(GameSession.started_at.desc()).first()
     if active_session and active_session.current_room_id:
         room = db.query(Room).filter(Room.room_id == active_session.current_room_id).first()
         if room:
-            correct_count = db.query(AnswerSubmission).join(Question).filter(
-                AnswerSubmission.player_id == body.player_id, Question.topic == room.topic,
-                AnswerSubmission.verdict == "correct",
-            ).count()
+            correct_count = _room_correct_count(db, body.player_id, room.topic)
+            hits_required = room.enemy_count
+            hits_landed = min(room.enemy_count, correct_count)
             room_cleared = check_room_clear(correct_count, room.enemy_count)
             if room_cleared:
-                # Check dungeon completion — all rooms cleared?
+                # Check dungeon completion — all rooms cleared? One grouped
+                # query instead of one COUNT per room.
                 all_rooms = db.query(Room).filter(Room.dungeon_id == active_session.dungeon_id).all()
-                room_statuses = []
-                for r in all_rooms:
-                    rc = db.query(AnswerSubmission).join(Question).filter(
+                correct_counts = dict(
+                    db.query(Question.topic, func.count(AnswerSubmission.submission_id))
+                    .join(AnswerSubmission, AnswerSubmission.question_id == Question.question_id)
+                    .filter(
                         AnswerSubmission.player_id == body.player_id,
-                        Question.topic == r.topic,
                         AnswerSubmission.verdict == "correct",
-                    ).count()
-                    # Include the current correct answer if it's for this room's topic
-                    if verdict == "correct" and r.topic == room.topic:
-                        pass  # already counted above
-                    room_statuses.append((rc, r.enemy_count))
+                    )
+                    .group_by(Question.topic)
+                    .all()
+                )
+                room_statuses = [(correct_counts.get(r.topic, 0), r.enemy_count) for r in all_rooms]
 
                 dungeon_completed = check_dungeon_complete(room_statuses)
                 if dungeon_completed:
@@ -303,7 +516,11 @@ async def submit_answer(body: AnswerSubmitRequest, db: Session = Depends(get_db)
                     player.total_xp += DUNGEON_COMPLETE_BONUS
                     player.level = calculate_level(player.total_xp)
                     # Hint replenishment: +1 on dungeon complete
-                    player.hint_tokens += 1
+                    player.hint_tokens = min(MAX_HINT_TOKENS, player.hint_tokens + 1)
+
+    # Computed last so a dungeon-completion bonus that pushes the player up an
+    # extra level (on top of the base XP gain) is reflected in the response.
+    new_level = player.level if player.level > original_level else None
 
     db.commit()
     return AnswerSubmitResponse(
@@ -311,6 +528,7 @@ async def submit_answer(body: AnswerSubmitRequest, db: Session = Depends(get_db)
         verdict=verdict, feedback=feedback, xp_gained=xp_gained, damage_dealt=damage_dealt,
         room_cleared=room_cleared, new_level=new_level,
         dungeon_completed=dungeon_completed,
+        hits_required=hits_required, hits_landed=hits_landed,
     )
 
 
@@ -394,7 +612,11 @@ async def use_hint(body: dict, db: Session = Depends(get_db)):
 # ─── Leaderboard ───
 
 @router.get("/leaderboard")
-async def get_leaderboard(limit: int = 10, offset: int = 0, db: Session = Depends(get_db)):
+async def get_leaderboard(
+    limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db),
+):
     players = db.query(Player).order_by(Player.total_xp.desc()).offset(offset).limit(limit).all()
     return [{"rank": offset + i + 1, "player_id": p.player_id,
              "username": p.username, "level": p.level,
@@ -402,7 +624,7 @@ async def get_leaderboard(limit: int = 10, offset: int = 0, db: Session = Depend
 
 
 @router.get("/leaderboard/guild")
-async def get_guild_leaderboard(limit: int = 10, db: Session = Depends(get_db)):
+async def get_guild_leaderboard(limit: int = Query(10, ge=1, le=100), db: Session = Depends(get_db)):
     """Guild leaderboard — ranked by combined member XP."""
     from sqlalchemy import func
     results = (

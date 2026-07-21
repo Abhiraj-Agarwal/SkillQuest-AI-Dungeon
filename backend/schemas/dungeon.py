@@ -50,3 +50,9 @@ class RoomEnterResponse(BaseModel):
     room: RoomResponse
     question: dict  # question_id, question, hint, topic, difficulty
     enemy_hp: int
+    # Hits-based combat truth: the villain's HP bar is driven by these, not by
+    # enemy_hp, so it always empties in exact sync with the real room-clear
+    # condition (correct_count >= hits_required) instead of an arbitrary flat
+    # HP pool that can disagree with when the room actually clears.
+    hits_required: int
+    hits_landed: int
