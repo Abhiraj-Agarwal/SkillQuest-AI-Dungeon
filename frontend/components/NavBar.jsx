@@ -3,10 +3,11 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Menu, X, Sword, ScrollText, Users, Trophy, BrainCircuit, HelpCircle } from 'lucide-react';
+import { Menu, X, Sword, ScrollText, Users, Trophy, BrainCircuit, HelpCircle, Volume2, VolumeX } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useOnboardingStore } from '@/store/useOnboardingStore';
+import { useMusicStore } from '@/store/useMusicStore';
 import PixelSprite from './PixelSprite';
 import { heroOrDefault } from '@/lib/sprites/heroSprites';
 
@@ -26,6 +27,8 @@ export default function NavBar() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const logout = useAuthStore((s) => s.logout);
   const openOnboarding = useOnboardingStore((s) => s.openModal);
+  const musicEnabled = useMusicStore((s) => s.enabled);
+  const toggleMusic = useMusicStore((s) => s.toggle);
 
   if (!isAuthenticated) return null;
 
@@ -56,6 +59,14 @@ export default function NavBar() {
         </div>
 
         <div className="hidden md:flex items-center gap-3">
+          <button
+            onClick={toggleMusic}
+            aria-label={musicEnabled ? 'Mute music' : 'Play music'}
+            title={musicEnabled ? 'Mute music' : 'Play music'}
+            className="text-parchment-dim hover:text-arcane"
+          >
+            {musicEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
+          </button>
           <button
             onClick={openOnboarding}
             aria-label="How to play"
@@ -104,6 +115,12 @@ export default function NavBar() {
           {LINKS.map((l) => (
             <NavLink key={l.href} {...l} active={pathname.startsWith(l.href)} onClick={() => setOpen(false)} />
           ))}
+          <button
+            onClick={toggleMusic}
+            className="font-display text-[9px] flex items-center gap-2 px-2 py-2 text-parchment-dim"
+          >
+            {musicEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />} {musicEnabled ? 'MUTE MUSIC' : 'PLAY MUSIC'}
+          </button>
           <button
             onClick={() => {
               openOnboarding();
