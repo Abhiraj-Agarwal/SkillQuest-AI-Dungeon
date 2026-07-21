@@ -5,13 +5,15 @@ import { useRequireAuth } from '@/lib/useRequireAuth';
 import { useAuthStore } from '@/store/useAuthStore';
 import { game } from '@/lib/api/client';
 import { STAT_MAP, TOPIC_LABELS } from '@/lib/statMap';
+import { heroOrDefault } from '@/lib/sprites/heroSprites';
 import PixelPanel from '@/components/ui/PixelPanel';
 import PixelBadge from '@/components/ui/PixelBadge';
+import PixelSprite from '@/components/PixelSprite';
 import XPBar from '@/components/XPBar';
 
 export default function StatSheetPage() {
   const { ready } = useRequireAuth();
-  const { player } = useAuthStore();
+  const player = useAuthStore((s) => s.player);
 
   const { data, isLoading } = useQuery({
     queryKey: ['player', player?.player_id],
@@ -22,20 +24,50 @@ export default function StatSheetPage() {
   if (!ready || !player) return null;
 
   const accuracies = data?.topic_accuracies || {};
+  const history = data?.accuracy_history || [];
+  // Totals aren't tracked as their own backend field -- they're just a sum
+  // over the same per-topic attempts/correct rows the topic breakdown below
+  // already renders, so no separate endpoint or schema change was needed.
+  const totalAttempts = history.reduce((sum, h) => sum + (h.attempts || 0), 0);
+  const totalCorrect = history.reduce((sum, h) => sum + (h.correct || 0), 0);
+  const hero = heroOrDefault(player.hero_id);
 
   return (
     <div className="max-w-3xl mx-auto flex flex-col gap-5">
       <PixelPanel variant="arcane">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-          <div>
+        <div className="flex flex-col md:flex-row md:items-center gap-4">
+          <PixelSprite src={hero.image} grid={hero.grid} palette={hero.palette} size={88} title={hero.name} />
+          <div className="flex-1">
             <h1 className="font-display text-sm text-parchment">{player.username}</h1>
-            <div className="flex gap-2 mt-2">
+            <p className="font-body text-arcane text-base mt-0.5">
+              {hero.name} <span className="text-parchment-dim">— {hero.powerupName}</span>
+            </p>
+            <div className="flex gap-2 mt-2 flex-wrap">
               <PixelBadge tone="gold">🔥 {player.streak_days} day streak</PixelBadge>
               <PixelBadge tone="arcane">{player.hint_tokens} hints left</PixelBadge>
+              <PixelBadge tone={hero.gender === 'male' ? 'arcane' : 'gold'}>{hero.gender}</PixelBadge>
             </div>
           </div>
           <div className="w-full md:w-60">
             <XPBar level={player.level} totalXp={player.total_xp} />
+          </div>
+        </div>
+      </PixelPanel>
+
+      <PixelPanel>
+        <h2 className="font-display text-xs text-gold mb-4">PROGRESS</h2>
+        <div className="grid grid-cols-3 gap-3 text-center">
+          <div className="border-2 border-black p-3 bg-stone-dark">
+            <div className="font-display text-lg text-arcane">{totalCorrect}</div>
+            <div className="font-body text-sm text-parchment-dim mt-1">questions solved</div>
+          </div>
+          <div className="border-2 border-black p-3 bg-stone-dark">
+            <div className="font-display text-lg text-parchment">{totalAttempts}</div>
+            <div className="font-body text-sm text-parchment-dim mt-1">questions attempted</div>
+          </div>
+          <div className="border-2 border-black p-3 bg-stone-dark">
+            <div className="font-display text-lg text-gold">{player.streak_days}</div>
+            <div className="font-body text-sm text-parchment-dim mt-1">day streak</div>
           </div>
         </div>
       </PixelPanel>

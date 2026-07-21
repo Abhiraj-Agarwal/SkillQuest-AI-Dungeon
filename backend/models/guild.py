@@ -20,7 +20,7 @@ class Guild(Base):
     raid_active = Column(Boolean, default=False)
     raid_boss_hp = Column(Integer, default=0)          # total HP for raid boss
     raid_boss_damage = Column(Integer, default=0)      # cumulative damage dealt
-    raid_topic_assignments = Column(JSON, default={})   # {player_id: topic}
+    raid_topic_assignments = Column(JSON, default=dict)   # {player_id: topic}
 
     # Relationships
     members = relationship("Player", back_populates="guild")

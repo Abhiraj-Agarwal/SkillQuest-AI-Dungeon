@@ -10,7 +10,9 @@ import PixelButton from '@/components/ui/PixelButton';
 
 export default function LoginPage() {
   const router = useRouter();
-  const { login, error, clearError } = useAuthStore();
+  const login = useAuthStore((s) => s.login);
+  const error = useAuthStore((s) => s.error);
+  const clearError = useAuthStore((s) => s.clearError);
   const [username, setUsername] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -20,7 +22,10 @@ export default function LoginPage() {
     setSubmitting(true);
     const ok = await login(username);
     setSubmitting(false);
-    if (ok) router.push('/dungeon');
+    if (ok) {
+      const player = useAuthStore.getState().player;
+      router.push(player?.hero_id ? '/dungeon' : '/character');
+    }
   }
 
   return (

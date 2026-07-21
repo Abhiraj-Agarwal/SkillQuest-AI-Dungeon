@@ -8,6 +8,10 @@
 
 import { MOCK_LATENCY, DUNGEON_ID, DOMAIN } from '../config';
 import { TOPIC_GRAPH, TOPIC_LABELS } from '../statMap';
+import { HEROES, DEFAULT_HERO_ID } from '../sprites/heroSprites';
+
+const POWERUP_MAX_USES_PER_WINDOW = 3;
+const POWERUP_WINDOW_MS = 60 * 60 * 1000;
 
 const STORAGE_KEY = 'codecrypt_mock_session';
 
@@ -114,7 +118,7 @@ function statusForTopic(topic) {
   if (!unlocked) return 'locked';
   const acc = state.accuracy[topic]?.recent_accuracy ?? 0;
   if (acc === 0) return 'unlocked';
-  if (acc > 0.8) return 'mastered';
+  if (acc >= 0.9) return 'mastered';
   if (acc < 0.5) return 'weak';
   return 'unlocked';
 }
@@ -151,6 +155,20 @@ function requireAuth() {
   }
 }
 
+// Read-only view of the cooldown window, mirroring backend/routes/game.py's
+// _powerup_status -- does not reset an expired window (only usePowerup does).
+function withPowerupStatus(player) {
+  const windowStart = player.powerup_window_start ? new Date(player.powerup_window_start) : null;
+  const windowActive = windowStart && Date.now() - windowStart.getTime() < POWERUP_WINDOW_MS;
+  const uses = windowActive ? player.powerup_uses_this_window || 0 : 0;
+  return {
+    ...player,
+    hero_id: player.hero_id || DEFAULT_HERO_ID,
+    powerup_uses_remaining: Math.max(0, POWERUP_MAX_USES_PER_WINDOW - uses),
+    powerup_resets_at: windowActive ? new Date(windowStart.getTime() + POWERUP_WINDOW_MS).toISOString() : null,
+  };
+}
+
 // ---------------- public mock API (same shapes the real client.js expects) ----------------
 
 export async function register(username) {
@@ -169,12 +187,15 @@ export async function register(username) {
     last_active: new Date().toISOString(),
     guild_id: null,
     hint_tokens: 3,
+    hero_id: null,
+    powerup_window_start: null,
+    powerup_uses_this_window: 0,
   };
   state.accuracy = freshAccuracy();
   state.difficultyHistory = [];
   state.scoreHistory = [];
   saveToStorage();
-  return { player: state.player };
+  return { player: withPowerupStatus(state.player) };
 }
 
 export async function login(username) {
@@ -183,7 +204,7 @@ export async function login(username) {
     // mock mode: auto-provision so teammates can demo without a real DB
     return register(username);
   }
-  return { player: state.player };
+  return { player: withPowerupStatus(state.player) };
 }
 
 export async function logout() {
@@ -200,7 +221,7 @@ export async function me() {
     err.code = 401;
     throw err;
   }
-  return { player: state.player };
+  return { player: withPowerupStatus(state.player) };
 }
 
 export async function getDungeon(_dungeonId) {
@@ -304,6 +325,18 @@ export async function submitAnswer({ question_id, player_answer, response_time_m
     }
   }
 
+  // Consume a pending Titan's Smash/Valkyrie's Charge-style powerup first
+  // (forces a correct critical hit outright), same as the real backend.
+  if (state.player.pending_force_correct) {
+    verdict = 'correct';
+    score = Math.max(score, 0.9);
+    state.player.pending_force_correct = false;
+  } else if (state.player.pending_verdict_boost) {
+    // Consume a pending Shadow Step-style powerup, same as the real backend.
+    verdict = { incorrect: 'partial', partial: 'correct' }[verdict] || verdict;
+    state.player.pending_verdict_boost = false;
+  }
+
   // slow responses (>12s) take a small extra hit, matching the README rule
   const slowPenalty = response_time_ms > 12000 ? 0.5 : 1;
 
@@ -315,7 +348,13 @@ export async function submitAnswer({ question_id, player_answer, response_time_m
   state.combat.enemy_hp = Math.max(0, state.combat.enemy_hp - damageDealt);
   state.combat.player_hp = Math.max(0, state.combat.player_hp - damageTaken);
 
-  const xp_gained = verdict === 'correct' ? 30 : verdict === 'partial' ? 12 : 2;
+  let xp_gained = verdict === 'correct' ? 30 : verdict === 'partial' ? 12 : 2;
+
+  // Consume a pending Arcane Surge-style powerup, same as the real backend.
+  if (state.player.pending_xp_multiplier && state.player.pending_xp_multiplier !== 1.0) {
+    xp_gained = Math.round(xp_gained * state.player.pending_xp_multiplier);
+    state.player.pending_xp_multiplier = 1.0;
+  }
 
   const topic = state.combat.topic;
   const acc = state.accuracy[topic];
@@ -346,10 +385,17 @@ export async function submitAnswer({ question_id, player_answer, response_time_m
     verdict,
     score: Number(score.toFixed(2)),
     damage_multiplier,
+    damage_dealt: damageDealt,
     feedback,
     xp_gained,
     player_hp_after: state.combat.player_hp,
     enemy_hp_after: state.combat.enemy_hp,
+    // Mock combat is purely HP-based (no server-side correct-answer counting),
+    // so the room/dungeon "cleared" signal is just the enemy's HP hitting 0 --
+    // mirrors the shape of the real backend's response so callers that check
+    // these fields (see app/combat, app/boss) behave the same in both modes.
+    room_cleared: state.combat.enemy_hp <= 0,
+    dungeon_completed: false,
   };
 }
 
@@ -360,7 +406,101 @@ export async function getPlayer(_playerId) {
   TOPICS.forEach((t) => {
     topic_accuracies[t] = state.accuracy[t]?.recent_accuracy ?? 0;
   });
-  return { ...state.player, topic_accuracies };
+  // Mirrors the real backend's accuracy_history shape (attempts/correct per
+  // topic) -- the profile page sums these for a total questions-solved count.
+  const accuracy_history = TOPICS.map((t) => ({
+    topic: t,
+    attempts: state.accuracy[t]?.attempts ?? 0,
+    correct: state.accuracy[t]?.correct ?? 0,
+    recent_accuracy: state.accuracy[t]?.recent_accuracy ?? 0,
+  }));
+  return { ...withPowerupStatus(state.player), topic_accuracies, accuracy_history };
+}
+
+export async function setHero(_playerId, heroId) {
+  await delay(MOCK_LATENCY.fast / 2);
+  requireAuth();
+  if (!HEROES[heroId]) {
+    const err = new Error(`Unknown hero: ${heroId}`);
+    err.code = 422;
+    throw err;
+  }
+  state.player.hero_id = heroId;
+  saveToStorage();
+  return { hero_id: heroId };
+}
+
+export async function usePowerup(_playerId, questionId) {
+  await delay(MOCK_LATENCY.fast / 2);
+  requireAuth();
+  const hero = HEROES[state.player.hero_id] || HEROES[DEFAULT_HERO_ID];
+
+  const windowStart = state.player.powerup_window_start ? new Date(state.player.powerup_window_start) : null;
+  const windowExpired = !windowStart || Date.now() - windowStart.getTime() >= POWERUP_WINDOW_MS;
+  if (windowExpired) {
+    state.player.powerup_window_start = new Date().toISOString();
+    state.player.powerup_uses_this_window = 0;
+  }
+
+  if (state.player.powerup_uses_this_window >= POWERUP_MAX_USES_PER_WINDOW) {
+    const resetsAt = new Date(new Date(state.player.powerup_window_start).getTime() + POWERUP_WINDOW_MS);
+    const err = new Error(`${hero.powerupName} is on cooldown until ${resetsAt.toLocaleTimeString()}.`);
+    err.code = 429;
+    throw err;
+  }
+
+  const response = { hero_id: state.player.hero_id || DEFAULT_HERO_ID, powerup_name: hero.powerupName, effect: hero.effect };
+
+  if (hero.effect === 'force_correct') {
+    state.player.pending_force_correct = true;
+    response.queued = true;
+  } else if (hero.effect === 'force_correct_heal') {
+    state.player.pending_force_correct = true;
+    response.queued = true;
+    response.heal_to_full = true;
+    if (state.combat) state.combat.player_hp = state.combat.player_hp_max;
+  } else if (hero.effect === 'double_xp_next') {
+    state.player.pending_xp_multiplier = 2.0;
+  } else if (hero.effect === 'verdict_boost_next') {
+    state.player.pending_verdict_boost = true;
+  } else if (hero.effect === 'free_hint_bonus_xp') {
+    if (!state.combat || state.combat.question_id !== questionId) {
+      const err = new Error('No active question for this powerup');
+      err.code = 409;
+      throw err;
+    }
+    const bank = QUESTION_BANK[state.combat.topic] || QUESTION_BANK.arrays;
+    const q = bank[state.combat.difficulty];
+    state.player.total_xp += hero.xp;
+    state.player.level = 1 + Math.floor(state.player.total_xp / 150);
+    response.hint_text = q.hint;
+    response.xp_awarded = hero.xp;
+  } else if (hero.effect === 'refill_hints') {
+    state.player.hint_tokens = 3;
+    response.hint_tokens = state.player.hint_tokens;
+  }
+
+  state.player.powerup_uses_this_window += 1;
+  saveToStorage();
+
+  response.powerup_uses_remaining = POWERUP_MAX_USES_PER_WINDOW - state.player.powerup_uses_this_window;
+  response.powerup_resets_at = new Date(
+    new Date(state.player.powerup_window_start).getTime() + POWERUP_WINDOW_MS
+  ).toISOString();
+  return response;
+}
+
+export async function useHint(_playerId, _questionId) {
+  await delay(MOCK_LATENCY.fast / 2);
+  requireAuth();
+  if (state.player.hint_tokens <= 0) {
+    const err = new Error('No hint tokens remaining');
+    err.code = 400;
+    throw err;
+  }
+  state.player.hint_tokens -= 1;
+  saveToStorage();
+  return { ok: true, hint_tokens: state.player.hint_tokens };
 }
 
 export async function joinGuildRaid(_guildId) {

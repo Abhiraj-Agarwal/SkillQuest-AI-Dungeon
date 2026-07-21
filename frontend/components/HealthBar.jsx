@@ -9,7 +9,7 @@ import { motion } from 'framer-motion';
  * and briefly shakes whenever `current` drops.
  */
 export default function HealthBar({ current, max, label, kind = 'player' }) {
-  const pct = Math.max(0, Math.min(100, (current / max) * 100));
+  const pct = max > 0 ? Math.max(0, Math.min(100, (current / max) * 100)) : 0;
   const prevRef = useRef(current);
   const [shake, setShake] = useState(false);
 
@@ -34,7 +34,7 @@ export default function HealthBar({ current, max, label, kind = 'player' }) {
           {Math.max(0, Math.round(current))}/{max}
         </span>
       </div>
-      <div className="relative h-6 w-full border-4 border-black bg-black p-[3px]">
+      <div className="relative h-6 w-full border-4 border-black bg-black p-[3px] overflow-hidden">
         <motion.div
           className="h-full"
           style={{ backgroundColor: color }}

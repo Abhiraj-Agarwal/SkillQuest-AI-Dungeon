@@ -6,6 +6,7 @@ caller (eventually Person 2's POST /game/room/enter handler, but fully
 testable solo by passing these three strings ourselves).
 """
 
+import asyncio
 import json
 import re
 import uuid
@@ -37,6 +38,11 @@ Difficulty: {difficulty}
 Subject domain: {domain}
 
 Generate a single exam-quality question for a student fighting you.
+"expected_answer" is compared against the student's free-text answer by a
+semantic similarity judge, so it must be a full explanatory answer (at least
+2-3 sentences) that states the fact AND explains the reasoning behind it --
+never a bare word, number, or one-line fact on its own (e.g. not just "O(1)"
+or "0"; explain *why* it is O(1) or *why* the index is 0).
 Respond in JSON only, no preamble:
 {{
   "question": "...",
@@ -99,6 +105,11 @@ async def generate_question(topic: str, difficulty: str, domain: str) -> dict:
                 config=types.GenerateContentConfig(
                     max_output_tokens=1024,
                     temperature=0.9,
+                    # Without this, a stuck/slow call hangs well past what a
+                    # player will wait for a question to generate, and blocks
+                    # this attempt from ever reaching the retry-with-backoff
+                    # logic below.
+                    http_options=types.HttpOptions(timeout=15000),  # ms
                 ),
             )
             raw_text = response.text
@@ -129,6 +140,27 @@ async def generate_question(topic: str, difficulty: str, domain: str) -> dict:
         except (json.JSONDecodeError, KeyError, ValueError) as exc:
             last_error = exc
             continue
+        except Exception as exc:
+            # Gemini itself throwing (rate limit, transient 503 "high demand",
+            # etc.) looks the same as any other retryable failure to this
+            # loop -- without this, a single transient blip skips retrying
+            # entirely and fails the whole request.
+            last_error = exc
+            error_str = str(exc)
+            # A per-day quota (the free tier's usual cap) cannot recover within
+            # a retry loop lasting a few seconds -- fail immediately instead of
+            # burning ~(2+4)s of backoff sleep on retries that cannot succeed.
+            is_daily_quota = "PerDay" in error_str
+            is_transient = not is_daily_quota and any(
+                marker in error_str for marker in ("429", "503", "UNAVAILABLE", "ResourceExhausted")
+            )
+            if is_transient and attempt < MAX_ATTEMPTS:
+                await asyncio.sleep(attempt * 2)
+                continue
+            raise QuestionGenerationError(
+                f"Failed to generate a valid question for topic={topic!r} "
+                f"difficulty={difficulty!r} after {attempt} attempt(s): {exc}"
+            ) from exc
 
     raise QuestionGenerationError(
         f"Failed to generate a valid question for topic={topic!r} "

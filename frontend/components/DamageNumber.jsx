@@ -26,7 +26,11 @@ export default function DamageNumber({ items }) {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.9, ease: 'easeOut' }}
             className="absolute font-display text-sm whitespace-nowrap"
-            style={{ color: TONE_COLOR[item.tone] || '#ece3cf', left: `${i * 6}px` }}
+            style={{
+              color: TONE_COLOR[item.tone] || '#ece3cf',
+              left: `${i * 6}px`,
+              top: `${-(i * 22)}px`,
+            }}
           >
             {item.text}
           </motion.span>
