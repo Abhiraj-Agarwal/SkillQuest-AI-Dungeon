@@ -1,12 +1,10 @@
 // Hand-authored hero pixel sprites + display/effect metadata.
 //
 // IMPORTANT: hero `id` keys, and the `effect`/`amount`/`xp` fields, must
-// exactly match backend/services/heroes.py's HEROES dict. The real backend
-// is authoritative for what a powerup does when NEXT_PUBLIC_USE_MOCK=false
-// (see routes/game.py's use_powerup) -- the copy here only exists so mock
-// mode (lib/mock/mockData.js) can simulate the same effect without a
-// backend. If you rename/add a hero or change a powerup's effect, update
-// both files together.
+// exactly match backend/services/heroes.py's HEROES dict -- the real
+// backend is authoritative for what a powerup actually does (see
+// routes/game.py's use_powerup). If you rename/add a hero or change a
+// powerup's effect, update both files together.
 //
 // TO ADD OR SWAP HERO ART: each entry's `image` points at the real PNG under
 // public/sprites/heroes/ (ChatGPT-generated, background-removed) -- <PixelSprite>

@@ -45,6 +45,7 @@ MAX_HINT_TOKENS = int(os.getenv("MAX_HINT_TOKENS", "3"))
 
 @router.post("/player/create")
 async def create_player(body: PlayerCreate, db: Session = Depends(get_db)):
+    """Create a new player with a unique username."""
     existing = db.query(Player).filter(Player.username == body.username).first()
     if existing:
         raise HTTPException(status_code=400, detail="Username already taken")
@@ -129,6 +130,7 @@ def _serialize_player(player: Player, histories: list[AccuracyHistory]) -> dict:
 
 @router.get("/player/{player_id}")
 async def get_player(player_id: str, db: Session = Depends(get_db)):
+    """Fetch a player's stats and per-topic accuracy history."""
     player = db.query(Player).filter(Player.player_id == player_id).first()
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
@@ -266,6 +268,7 @@ async def list_dungeons(db: Session = Depends(get_db)):
 
 @router.get("/dungeon/{dungeon_id}", response_model=DungeonResponse)
 async def get_dungeon(dungeon_id: str, db: Session = Depends(get_db)):
+    """Return a dungeon and its rooms."""
     dungeon = db.query(Dungeon).filter(Dungeon.dungeon_id == dungeon_id).first()
     if not dungeon:
         raise HTTPException(status_code=404, detail="Dungeon not found")
@@ -274,6 +277,7 @@ async def get_dungeon(dungeon_id: str, db: Session = Depends(get_db)):
 
 @router.post("/session/start", response_model=SessionStartResponse)
 async def start_session(body: SessionStartRequest, db: Session = Depends(get_db)):
+    """Start a dungeon run: seed missing accuracy rows, bump streak, open the first room."""
     player = db.query(Player).filter(Player.player_id == body.player_id).first()
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
@@ -319,6 +323,7 @@ async def start_session(body: SessionStartRequest, db: Session = Depends(get_db)
 
 @router.post("/room/enter", response_model=RoomEnterResponse)
 async def enter_room(body: RoomEnterRequest, db: Session = Depends(get_db)):
+    """Enter a room, pick a difficulty, and generate its question via AI."""
     session = db.query(GameSession).filter(GameSession.session_id == body.session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
@@ -384,6 +389,7 @@ async def enter_room(body: RoomEnterRequest, db: Session = Depends(get_db)):
 
 @router.post("/answer/submit", response_model=AnswerSubmitResponse)
 async def submit_answer(body: AnswerSubmitRequest, db: Session = Depends(get_db)):
+    """Judge the answer, award XP/damage, and update accuracy history + room/dungeon progress."""
     player = db.query(Player).filter(Player.player_id == body.player_id).first()
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
@@ -610,6 +616,7 @@ async def get_next_topic_for_player(dungeon_id: str, player_id: str, db: Session
 
 @router.post("/hint/use")
 async def use_hint(body: dict, db: Session = Depends(get_db)):
+    """Spend one hint token to reveal a question's hint."""
     player = db.query(Player).filter(Player.player_id == body.get("player_id")).first()
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
@@ -631,6 +638,7 @@ async def get_leaderboard(
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
+    """Rank players by total XP."""
     players = db.query(Player).order_by(Player.total_xp.desc()).offset(offset).limit(limit).all()
     return [{"rank": offset + i + 1, "player_id": p.player_id,
              "username": p.username, "level": p.level,
@@ -665,6 +673,7 @@ async def get_guild_leaderboard(limit: int = Query(10, ge=1, le=100), db: Sessio
 
 @router.post("/guild/create", response_model=GuildResponse)
 async def create_guild(body: GuildCreate, db: Session = Depends(get_db)):
+    """Create a guild and make the creator its first member."""
     player = db.query(Player).filter(Player.player_id == body.creator_player_id).first()
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
@@ -682,6 +691,7 @@ async def create_guild(body: GuildCreate, db: Session = Depends(get_db)):
 
 @router.post("/guild/join")
 async def join_guild(body: GuildJoinRequest, db: Session = Depends(get_db)):
+    """Add a player to an existing guild."""
     player = db.query(Player).filter(Player.player_id == body.player_id).first()
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
@@ -694,6 +704,7 @@ async def join_guild(body: GuildJoinRequest, db: Session = Depends(get_db)):
 
 @router.post("/guild/raid/join")
 async def join_raid(body: RaidJoinRequest, db: Session = Depends(get_db)):
+    """Join (or start) the guild's raid and assign the player their weakest topic."""
     guild = db.query(Guild).filter(Guild.guild_id == body.guild_id).first()
     if not guild:
         raise HTTPException(status_code=404, detail="Guild not found")
@@ -803,6 +814,7 @@ async def get_raid_status(guild_id: str, db: Session = Depends(get_db)):
 
 @router.get("/guild/{guild_id}", response_model=GuildResponse)
 async def get_guild(guild_id: str, db: Session = Depends(get_db)):
+    """Fetch a guild and its members."""
     guild = db.query(Guild).filter(Guild.guild_id == guild_id).first()
     if not guild:
         raise HTTPException(status_code=404, detail="Guild not found")
