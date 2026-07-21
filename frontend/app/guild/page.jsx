@@ -12,7 +12,7 @@ import HealthBar from '@/components/HealthBar';
 
 export default function GuildPage() {
   const { ready } = useRequireAuth();
-  const { player } = useAuthStore();
+  const player = useAuthStore((s) => s.player);
   const [guild, setGuild] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);

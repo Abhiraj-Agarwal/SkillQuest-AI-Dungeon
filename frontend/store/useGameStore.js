@@ -20,6 +20,8 @@ export const useGameStore = create((set, get) => ({
   submitError: null,
 
   hintRevealed: false,
+  powerupResult: null,
+  powerupError: null,
 
   async loadDungeon(dungeonId) {
     set({ loadingDungeon: true, dungeonError: null });
@@ -48,7 +50,12 @@ export const useGameStore = create((set, get) => ({
         questionStartedAt: Date.now(),
       });
     } catch (e) {
-      set({ enteringRoom: false, dungeonError: e.message });
+      // submitError, not dungeonError -- the combat/boss pages that call
+      // enterRoom() only render dungeonError on the separate /dungeon map
+      // page. Setting the wrong field here left a locked/unreachable room
+      // (e.g. the boss before every topic is cleared) rendering a blank
+      // page with zero feedback instead of the actual error message.
+      set({ enteringRoom: false, submitError: e.message });
     }
   },
 
@@ -91,8 +98,36 @@ export const useGameStore = create((set, get) => ({
     }
   },
 
+  // `onPlayerEffect` lets the caller react to server-authoritative changes
+  // this powerup made (bonus XP, refilled hint tokens) without this store
+  // needing to know about useAuthStore.
+  async usePowerup(playerId, onPlayerEffect) {
+    const questionId = get().currentQuestion?.question_id;
+    set({ powerupError: null });
+    try {
+      const result = await game.usePowerup(playerId, questionId);
+      set((s) => ({
+        // force_correct/force_correct_heal don't touch enemy HP immediately --
+        // they queue a guaranteed-correct verdict the backend applies on the
+        // next submit, which reports the real hits_required/hits_landed then.
+        // heal_to_full is the one effect with no server-side HP pool to
+        // report back, so it's applied here directly.
+        combat: s.combat
+          ? { ...s.combat, playerHp: result.heal_to_full ? s.combat.playerHpMax : s.combat.playerHp }
+          : s.combat,
+        hintRevealed: result.hint_text ? true : s.hintRevealed,
+        powerupResult: result,
+      }));
+      onPlayerEffect?.(result);
+      return result;
+    } catch (e) {
+      set({ powerupError: e.message });
+      return null;
+    }
+  },
+
   resetCombat() {
-    set({ currentQuestion: null, combat: null, lastResult: null, hintRevealed: false });
+    set({ currentQuestion: null, combat: null, lastResult: null, hintRevealed: false, powerupResult: null });
   },
 
   async retreat() {

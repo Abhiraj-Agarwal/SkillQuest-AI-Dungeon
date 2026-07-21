@@ -18,8 +18,17 @@ export const useAuthStore = create(
         try {
           const { player } = await auth.me();
           set({ player, isAuthenticated: true, loading: false, error: null });
-        } catch {
-          set({ player: null, isAuthenticated: false, loading: false });
+        } catch (e) {
+          // Only treat an actual 401/403 as "not logged in." A dropped request
+          // or backend hiccup (error.code === 0, or any 5xx) is refetched from
+          // fetchMe()'s next call — it must not eject an already-authenticated
+          // player out of an in-progress fight and back to /login.
+          const isAuthError = e.code === 401 || e.code === 403;
+          if (isAuthError || isInitialLoad) {
+            set({ player: null, isAuthenticated: false, loading: false });
+          } else {
+            set({ loading: false });
+          }
         }
       },
 
@@ -62,6 +71,19 @@ export const useAuthStore = create(
         const p = get().player;
         if (!p || p.hint_tokens <= 0) return;
         set({ player: { ...p, hint_tokens: p.hint_tokens - 1 } });
+      },
+
+      async selectHero(heroId) {
+        const p = get().player;
+        if (!p) return false;
+        try {
+          await auth.setHero(p.player_id, heroId);
+          set({ player: { ...p, hero_id: heroId } });
+          return true;
+        } catch (e) {
+          set({ error: e.message });
+          return false;
+        }
       },
     }),
     {

@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import ReactFlow, { Background, Handle, Position } from 'reactflow';
+import ReactFlow, { Background, Handle, Position, useViewport } from 'reactflow';
 import 'reactflow/dist/style.css';
 import {
   LineChart,
@@ -19,9 +19,47 @@ import { ai } from '@/lib/api/client';
 import { layoutGraph } from '@/lib/graphLayout';
 import PixelPanel from './ui/PixelPanel';
 import PixelBadge from './ui/PixelBadge';
+import PixelSprite from './PixelSprite';
+import ChainLink from './ChainLink';
+import { monsterForTopic } from '@/lib/sprites/monsterSprites';
+
+const NODE_WIDTH = 140;
+const NODE_HEIGHT = 90;
+
+// ReactFlow 11's edge renderer only draws an edge once it considers both
+// endpoint nodes "measured" (their Handle DOM bounds recorded internally).
+// That measurement pass never completes for this project's React 19 +
+// ReactFlow 11 combination -- reproducible even with a stock, uncustomized
+// 2-node/1-edge example -- so edges silently never render, regardless of
+// edge type. Rather than depend on that broken subsystem, this draws the
+// chain-link connectors as an independent overlay driven by ReactFlow's
+// (separately, and correctly) tracked pan/zoom viewport.
+function GraphChainOverlay({ positions, edges }) {
+  const { x: vpX, y: vpY, zoom } = useViewport();
+
+  function toScreen(p) {
+    return {
+      x: (p.x + NODE_WIDTH / 2) * zoom + vpX,
+      y: (p.y + NODE_HEIGHT / 2) * zoom + vpY,
+    };
+  }
+
+  return (
+    <svg className="absolute inset-0 w-full h-full pointer-events-none" style={{ zIndex: 0 }}>
+      {edges.map((e, i) => {
+        const from = positions[e.source];
+        const to = positions[e.target];
+        if (!from || !to) return null;
+        const a = toScreen(from);
+        const b = toScreen(to);
+        return <ChainLink key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} linkSize={Math.max(6, 14 * zoom)} />;
+      })}
+    </svg>
+  );
+}
 
 const STATUS_COLOR = {
-  locked: '#3d3450',
+  locked: '#443d34',
   unlocked: '#6ee7d0',
   weak: '#c43d3d',
   mastered: '#e8b339',
@@ -30,12 +68,14 @@ const STATUS_COLOR = {
 const DIFFICULTY_VALUE = { easy: 1, medium: 2, hard: 3 };
 
 function StoneNode({ data }) {
+  const monster = monsterForTopic(data.id);
   return (
     <div
-      className="font-display text-[8px] text-center px-2 py-2 border-4 border-black bg-stone"
+      className="font-display text-[8px] text-center px-2 py-2 border-4 border-black bg-stone flex flex-col items-center gap-1"
       style={{ width: 140, boxShadow: `0 0 0 2px ${STATUS_COLOR[data.status]}` }}
     >
       <Handle type="target" position={Position.Top} style={{ background: '#000' }} />
+      <PixelSprite src={monster.image} grid={monster.grid} palette={monster.palette} size={28} title={monster.name} />
       <div className="text-parchment leading-tight">{data.label}</div>
       <div className="font-body text-sm mt-1" style={{ color: STATUS_COLOR[data.status] }}>
         {Math.round(data.accuracy * 100)}%
@@ -52,11 +92,14 @@ export default function MLDashboard({ playerId }) {
     queryKey: ['dashboard', playerId],
     queryFn: () => ai.getDashboard(playerId),
     enabled: !!playerId,
-    refetchInterval: 6000, // polling default per integration contract
+    // 15s instead of 6s: this panel runs ReactFlow + two recharts and a full
+    // DB read on every refetch; nothing meaningful changes for the player
+    // between answers, so tighter polling was pure background churn.
+    refetchInterval: 15000,
   });
 
-  const { nodes, edges } = useMemo(() => {
-    if (!data?.graph) return { nodes: [], edges: [] };
+  const { nodes, edges, positions } = useMemo(() => {
+    if (!data?.graph) return { nodes: [], edges: [], positions: {} };
     const positions = layoutGraph();
     const nodes = data.graph.nodes.map((n) => ({
       id: n.id,
@@ -64,14 +107,7 @@ export default function MLDashboard({ playerId }) {
       position: positions[n.id] || { x: 0, y: 0 },
       data: n,
     }));
-    const edges = data.graph.edges.map((e) => ({
-      id: `${e.source}-${e.target}`,
-      source: e.source,
-      target: e.target,
-      style: { stroke: '#6ee7d0', strokeWidth: 2 },
-      animated: true,
-    }));
-    return { nodes, edges };
+    return { nodes, edges: data.graph.edges, positions };
   }, [data]);
 
   const scoreChartData = useMemo(
@@ -98,7 +134,7 @@ export default function MLDashboard({ playerId }) {
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      <PixelPanel variant="arcane" className="lg:col-span-2 h-[420px] relative">
+      <PixelPanel variant="arcane" className="lg:col-span-2 lg:h-[430px] relative">
         <div className="flex items-center justify-between mb-2">
           <h3 className="font-display text-xs text-arcane">KNOWLEDGE GRAPH</h3>
           <PixelBadge tone="arcane" className="animate-pulse">LIVE</PixelBadge>
@@ -106,10 +142,10 @@ export default function MLDashboard({ playerId }) {
         {isLoading ? (
           <p className="font-body text-parchment-dim">Reading the dungeon&apos;s mind…</p>
         ) : (
-          <div className="h-[340px]">
+          <div className="h-[300px]">
             <ReactFlow
               nodes={nodes}
-              edges={edges}
+              edges={[]}
               nodeTypes={nodeTypes}
               fitView
               proOptions={{ hideAttribution: true }}
@@ -117,7 +153,8 @@ export default function MLDashboard({ playerId }) {
               nodesConnectable={false}
               elementsSelectable={false}
             >
-              <Background color="#1a1523" gap={16} />
+              <Background color="#18140f" gap={16} />
+              <GraphChainOverlay positions={positions} edges={edges} />
             </ReactFlow>
           </div>
         )}
@@ -129,7 +166,7 @@ export default function MLDashboard({ playerId }) {
           <h3 className="font-display text-xs text-gold mb-2">RL DIFFICULTY TUNER</h3>
           <ResponsiveContainer width="100%" height={130}>
             <LineChart data={difficultyChartData}>
-              <CartesianGrid stroke="#1a1523" />
+              <CartesianGrid stroke="#18140f" />
               <XAxis dataKey="idx" stroke="#a89f8c" fontSize={10} />
               <YAxis
                 domain={[0, 3]}
@@ -139,7 +176,7 @@ export default function MLDashboard({ playerId }) {
                 fontSize={10}
               />
               <Tooltip
-                contentStyle={{ background: '#1a1523', border: '2px solid #000', fontFamily: 'var(--font-vt323)' }}
+                contentStyle={{ background: '#18140f', border: '2px solid #000', fontFamily: 'var(--font-vt323)' }}
                 formatter={(v) => ['', 'easy', 'medium', 'hard'][v]}
               />
               <Line type="stepAfter" dataKey="value" stroke="#e8b339" strokeWidth={3} dot={{ r: 3 }} />
@@ -151,10 +188,10 @@ export default function MLDashboard({ playerId }) {
           <h3 className="font-display text-xs text-ember mb-2">NLP JUDGE SCORES</h3>
           <ResponsiveContainer width="100%" height={130}>
             <BarChart data={scoreChartData}>
-              <CartesianGrid stroke="#1a1523" />
+              <CartesianGrid stroke="#18140f" />
               <XAxis dataKey="idx" stroke="#a89f8c" fontSize={10} />
               <YAxis domain={[0, 1]} stroke="#a89f8c" fontSize={10} />
-              <Tooltip contentStyle={{ background: '#1a1523', border: '2px solid #000', fontFamily: 'var(--font-vt323)' }} />
+              <Tooltip contentStyle={{ background: '#18140f', border: '2px solid #000', fontFamily: 'var(--font-vt323)' }} />
               <Bar dataKey="score" fill="#ff6b3d" />
             </BarChart>
           </ResponsiveContainer>

@@ -14,7 +14,7 @@ export default function XPBar({ level, totalXp }) {
         LV {level}
       </div>
       <div className="flex-1">
-        <div className="relative h-4 w-full border-4 border-black bg-black p-[2px]">
+        <div className="relative h-4 w-full border-4 border-black bg-black p-[2px] overflow-hidden">
           <motion.div
             className="h-full bg-gold"
             animate={{ width: `${pct}%` }}

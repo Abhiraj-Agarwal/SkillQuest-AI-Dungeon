@@ -13,13 +13,13 @@ const RANK_TONE = ['gold', 'arcane', 'ember'];
 
 export default function LeaderboardPage() {
   const { ready } = useRequireAuth();
-  const { player } = useAuthStore();
+  const player = useAuthStore((s) => s.player);
 
   const { data, isLoading } = useQuery({
     queryKey: ['leaderboard'],
     queryFn: () => game.getLeaderboard(),
     enabled: ready,
-    refetchInterval: 5000, // polling default per integration contract
+    refetchInterval: 10000, // was 5000 -- halved background query volume, still feels live
   });
 
   if (!ready) return null;

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
-import { Lock, Sword, Crown } from 'lucide-react';
+import { Lock } from 'lucide-react';
 import clsx from 'clsx';
 import { useRequireAuth } from '@/lib/useRequireAuth';
 import { useGameStore } from '@/store/useGameStore';
@@ -12,6 +12,9 @@ import { DUNGEON_ID } from '@/lib/config';
 import PixelPanel from '@/components/ui/PixelPanel';
 import PixelBadge from '@/components/ui/PixelBadge';
 import XPBar from '@/components/XPBar';
+import ChainLink from '@/components/ChainLink';
+import PixelSprite from '@/components/PixelSprite';
+import { monsterForTopic } from '@/lib/sprites/monsterSprites';
 
 const STATUS_STYLE = {
   locked: 'bg-stone-light border-black opacity-50',
@@ -23,14 +26,21 @@ const STATUS_STYLE = {
 export default function DungeonMapPage() {
   const { ready } = useRequireAuth();
   const router = useRouter();
-  const { player } = useAuthStore();
-  const { dungeon, loadingDungeon, dungeonError, loadDungeon } = useGameStore();
+  const player = useAuthStore((s) => s.player);
+  const dungeon = useGameStore((s) => s.dungeon);
+  const loadingDungeon = useGameStore((s) => s.loadingDungeon);
+  const dungeonError = useGameStore((s) => s.dungeonError);
+  const loadDungeon = useGameStore((s) => s.loadDungeon);
 
   useEffect(() => {
     if (ready) loadDungeon(DUNGEON_ID);
   }, [ready, loadDungeon]);
 
-  const positions = useMemo(() => layoutGraph({ colWidth: 170, rowHeight: 120 }), []);
+  // rowHeight must be >= the room tile's rendered height (tile - 20 = 130px)
+  // plus a visible gap, or adjacent depth rows overlap on the map.
+  const tile = 150;
+  const rowHeight = 170;
+  const positions = useMemo(() => layoutGraph({ colWidth: 170, rowHeight }), []);
 
   if (!ready || loadingDungeon || !dungeon) {
     return <p className="font-body text-parchment-dim text-center mt-10">Descending into the dungeon…</p>;
@@ -44,7 +54,8 @@ export default function DungeonMapPage() {
   const minX = Math.min(...xs);
   const maxY = Math.max(...ys);
   const offsetX = -minX + 80;
-  const tile = 150;
+  const bossTop = maxY + rowHeight;
+  const bossHeight = tile - 10;
 
   const edges = [];
   dungeon.rooms.forEach((r) => {
@@ -72,7 +83,7 @@ export default function DungeonMapPage() {
       <PixelPanel className="overflow-x-auto">
         <div
           className="relative mx-auto"
-          style={{ width: offsetX * 2 + tile, height: maxY + tile + 100, minWidth: 600 }}
+          style={{ width: offsetX * 2 + tile, height: bossTop + bossHeight + 30, minWidth: 600 }}
         >
           <svg className="absolute inset-0 w-full h-full pointer-events-none">
             {edges.map((e, i) => {
@@ -80,16 +91,13 @@ export default function DungeonMapPage() {
               const to = positions[e.to];
               if (!from || !to) return null;
               return (
-                <line
+                <ChainLink
                   key={i}
                   x1={from.x + offsetX + tile / 2}
                   y1={from.y + tile / 2}
                   x2={to.x + offsetX + tile / 2}
                   y2={to.y + tile / 2}
-                  stroke="#6ee7d0"
-                  strokeOpacity={0.35}
-                  strokeWidth={3}
-                  strokeDasharray="6 4"
+                  linkSize={22}
                 />
               );
             })}
@@ -99,6 +107,7 @@ export default function DungeonMapPage() {
             const pos = positions[room.topic];
             if (!pos) return null;
             const locked = room.status === 'locked';
+            const monster = monsterForTopic(room.topic);
             return (
               <button
                 key={room.topic}
@@ -106,12 +115,16 @@ export default function DungeonMapPage() {
                 onClick={() => router.push(`/combat/${room.topic}`)}
                 style={{ left: pos.x + offsetX, top: pos.y, width: tile, height: tile - 20 }}
                 className={clsx(
-                  'absolute flex flex-col items-center justify-center gap-2 border-4 p-2 transition-transform',
+                  'absolute flex flex-col items-center justify-center gap-1 border-4 p-2 transition-transform',
                   'hover:-translate-y-1 disabled:hover:translate-y-0 disabled:cursor-not-allowed',
                   STATUS_STYLE[room.status]
                 )}
               >
-                {locked ? <Lock size={18} /> : <Sword size={18} />}
+                {locked ? (
+                  <Lock size={28} />
+                ) : (
+                  <PixelSprite src={monster.image} grid={monster.grid} palette={monster.palette} size={40} title={monster.name} />
+                )}
                 <span className="font-display text-[8px] text-parchment text-center leading-tight">
                   {room.label}
                 </span>
@@ -128,13 +141,23 @@ export default function DungeonMapPage() {
           <button
             disabled={!dungeon.boss_unlocked}
             onClick={() => router.push(`/boss/${DUNGEON_ID}`)}
-            style={{ left: offsetX + tile / 4, top: maxY + tile, width: tile * 1.5, height: tile - 10 }}
+            style={{ left: offsetX + tile / 4, top: bossTop, width: tile * 1.5, height: bossHeight }}
             className={clsx(
-              'absolute flex flex-col items-center justify-center gap-2 border-4 p-2',
+              'absolute flex flex-col items-center justify-center gap-1 border-4 p-2',
               dungeon.boss_unlocked ? 'bg-stone border-ember' : 'bg-stone-light border-black opacity-50'
             )}
           >
-            {dungeon.boss_unlocked ? <Crown size={20} className="text-ember" /> : <Lock size={18} />}
+            {dungeon.boss_unlocked ? (
+              <PixelSprite
+                src={monsterForTopic('boss').image}
+                grid={monsterForTopic('boss').grid}
+                palette={monsterForTopic('boss').palette}
+                size={48}
+                title={monsterForTopic('boss').name}
+              />
+            ) : (
+              <Lock size={28} />
+            )}
             <span className="font-display text-[8px] text-parchment text-center">
               {dungeon.boss_unlocked ? 'THE BIG-O DEVOURER' : 'CLEAR ALL ROOMS FIRST'}
             </span>

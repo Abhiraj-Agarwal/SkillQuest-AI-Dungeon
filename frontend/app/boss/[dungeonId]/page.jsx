@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useRequireAuth } from '@/lib/useRequireAuth';
 import { useGameStore } from '@/store/useGameStore';
@@ -12,6 +12,10 @@ import PixelBadge from '@/components/ui/PixelBadge';
 import HealthBar from '@/components/HealthBar';
 import HintToken from '@/components/HintToken';
 import DamageNumber from '@/components/DamageNumber';
+import VillainSprite from '@/components/VillainSprite';
+import PowerupButton from '@/components/PowerupButton';
+import PixelSprite from '@/components/PixelSprite';
+import { heroOrDefault } from '@/lib/sprites/heroSprites';
 
 const VERDICT_TONE = { correct: 'arcane', partial: 'gold', incorrect: 'blood' };
 const BOSS_TOPIC = 'boss';
@@ -20,24 +24,29 @@ export default function BossFightPage() {
   const { ready } = useRequireAuth();
   const router = useRouter();
 
-  const { player, spendHintToken, fetchMe } = useAuthStore();
-  const {
-    currentQuestion,
-    combat,
-    enteringRoom,
-    lastResult,
-    submitting,
-    submitError,
-    hintRevealed,
-    enterRoom,
-    submitAnswer,
-    revealHint,
-    resetCombat,
-    retreat,
-  } = useGameStore();
+  const player = useAuthStore((s) => s.player);
+  const spendHintToken = useAuthStore((s) => s.spendHintToken);
+  const fetchMe = useAuthStore((s) => s.fetchMe);
+
+  const currentQuestion = useGameStore((s) => s.currentQuestion);
+  const combat = useGameStore((s) => s.combat);
+  const enteringRoom = useGameStore((s) => s.enteringRoom);
+  const lastResult = useGameStore((s) => s.lastResult);
+  const submitting = useGameStore((s) => s.submitting);
+  const submitError = useGameStore((s) => s.submitError);
+  const hintRevealed = useGameStore((s) => s.hintRevealed);
+  const enterRoom = useGameStore((s) => s.enterRoom);
+  const submitAnswer = useGameStore((s) => s.submitAnswer);
+  const revealHint = useGameStore((s) => s.revealHint);
+  const resetCombat = useGameStore((s) => s.resetCombat);
+  const retreat = useGameStore((s) => s.retreat);
+  const triggerPowerup = useGameStore((s) => s.usePowerup);
+  const powerupResult = useGameStore((s) => s.powerupResult);
+  const powerupError = useGameStore((s) => s.powerupError);
 
   const [answer, setAnswer] = useState('');
   const [floats, setFloats] = useState([]);
+  const floatTimeoutsRef = useRef([]);
 
   useEffect(() => {
     if (ready) enterRoom(BOSS_TOPIC);
@@ -55,11 +64,19 @@ export default function BossFightPage() {
         : lastResult.verdict === 'partial'
         ? `-${lastResult.damage_dealt} HP`
         : 'MISS';
-    setFloats((f) => [...f, { id, text, tone: lastResult.verdict === 'incorrect' ? 'damage' : 'xp' }]);
+    setFloats((f) => [...f, { id, text, tone: lastResult.verdict === 'correct' ? 'xp' : 'damage' }]);
+    // Timeout is tracked in a ref and only cleared on unmount, not on the next
+    // `lastResult` change — otherwise re-entering combat before 1s elapses
+    // cancels this removal and leaves a permanent "ghost" float on screen.
     const t = setTimeout(() => setFloats((f) => f.filter((x) => x.id !== id)), 1000);
-    return () => clearTimeout(t);
+    floatTimeoutsRef.current.push(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastResult]);
+
+  useEffect(() => {
+    const timeouts = floatTimeoutsRef.current;
+    return () => timeouts.forEach(clearTimeout);
+  }, []);
 
   if (!ready) return null;
 
@@ -84,7 +101,10 @@ export default function BossFightPage() {
 
   if (!currentQuestion || !combat) return null;
 
-  const bossDefeated = combat.enemyHp <= 0;
+  // See the equivalent note in app/combat/[roomId]/page.jsx: the client-side
+  // HP pool and the backend's actual clear condition are independent and can
+  // disagree, so trust whichever says the fight is over first.
+  const bossDefeated = combat.enemyHp <= 0 || Boolean(lastResult?.dungeon_completed);
   const playerDefeated = combat.playerHp <= 0;
   const fightOver = bossDefeated || playerDefeated;
 
@@ -110,6 +130,10 @@ export default function BossFightPage() {
     router.push('/dungeon');
   }
 
+  async function handleUsePowerup() {
+    await triggerPowerup(player.player_id, () => fetchMe());
+  }
+
   return (
     <div className="max-w-2xl mx-auto flex flex-col gap-5">
       <div className="text-center">
@@ -122,12 +146,45 @@ export default function BossFightPage() {
           <span className="font-display text-[10px] text-ember">THE BIG-O DEVOURER</span>
           <PixelBadge tone="ember">{currentQuestion.difficulty}</PixelBadge>
         </div>
-        <DamageNumber items={floats} />
-        <HealthBar current={combat.enemyHp} max={combat.enemyHpMax} label="BOSS" kind="enemy" />
+        <div className="flex items-center gap-4">
+          <VillainSprite topic="boss" hitKey={lastResult?.submission_id} defeated={bossDefeated} size={88} />
+          <div className="flex-1 relative">
+            <DamageNumber items={floats} />
+            <HealthBar current={combat.enemyHp} max={combat.enemyHpMax} label="BOSS" kind="enemy" />
+          </div>
+        </div>
       </PixelPanel>
 
       <PixelPanel>
-        <HealthBar current={combat.playerHp} max={combat.playerHpMax} label={player.username.toUpperCase()} kind="player" />
+        <div className="flex items-center gap-4">
+          <PixelSprite
+            src={heroOrDefault(player.hero_id).image}
+            grid={heroOrDefault(player.hero_id).grid}
+            palette={heroOrDefault(player.hero_id).palette}
+            size={56}
+            title={heroOrDefault(player.hero_id).name}
+          />
+          <div className="flex-1">
+            <HealthBar current={combat.playerHp} max={combat.playerHpMax} label={player.username.toUpperCase()} kind="player" />
+          </div>
+        </div>
+        <div className="mt-3 flex items-center gap-3 flex-wrap">
+          <PowerupButton
+            heroId={player.hero_id}
+            usesRemaining={player.powerup_uses_remaining}
+            resetsAt={player.powerup_resets_at}
+            onUse={handleUsePowerup}
+            disabled={fightOver}
+          />
+          {powerupError && <span className="font-body text-blood text-sm">{powerupError}</span>}
+          {powerupResult && !powerupError && (
+            <span className="font-body text-gold text-sm">
+              {powerupResult.powerup_name} used!
+              {powerupResult.queued ? ' Your next answer lands as a guaranteed critical hit.' : ''}
+              {powerupResult.xp_awarded ? ` +${powerupResult.xp_awarded} XP` : ''}
+            </span>
+          )}
+        </div>
       </PixelPanel>
 
       <PixelPanel>

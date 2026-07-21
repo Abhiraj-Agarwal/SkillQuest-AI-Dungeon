@@ -36,6 +36,20 @@ function clearLiveState() {
 
 hydrateLiveState();
 
+const inFlightRequests = new Map();
+
+// Collapses concurrent calls sharing the same key into a single underlying
+// request. Without this, React StrictMode's dev-only double-invoke of
+// effects (and any accidental fast double-click) fires two full round trips
+// through the AI service for one logical action -- doubling latency and
+// burning through Gemini's free-tier quota twice as fast.
+function dedupe(key, run) {
+  if (inFlightRequests.has(key)) return inFlightRequests.get(key);
+  const promise = run().finally(() => inFlightRequests.delete(key));
+  inFlightRequests.set(key, promise);
+  return promise;
+}
+
 async function request(path, { method = 'GET', body, headers } = {}) {
   let response;
   try {
@@ -76,7 +90,9 @@ async function currentPlayer() {
     error.code = 401;
     throw error;
   }
-  return request(`/game/player/${live.playerId}`);
+  // fetchMe() fires after every answer submission (see app/combat, app/boss)
+  // plus once on app mount -- dedupe concurrent calls for the same player.
+  return dedupe(`current-player:${live.playerId}`, () => request(`/game/player/${live.playerId}`));
 }
 
 function accuracyMap(player) {
@@ -87,13 +103,13 @@ function accuracyMap(player) {
 
 function normalizeDungeon(dungeon, player) {
   const accuracies = accuracyMap(player);
-  const rooms = dungeon.rooms.filter((room) => room.topic in TOPIC_GRAPH).map((room) => {
+  const rooms = (dungeon.rooms || []).filter((room) => room.topic in TOPIC_GRAPH).map((room) => {
     const recentAccuracy = accuracies[room.topic] ?? 0;
     const prerequisites = TOPIC_GRAPH[room.topic] || [];
     const isUnlocked = prerequisites.every((topic) => (accuracies[topic] ?? 0) > 0.65);
     let status = 'unlocked';
     if (!isUnlocked) status = 'locked';
-    else if (recentAccuracy > 0.8) status = 'mastered';
+    else if (recentAccuracy >= 0.9) status = 'mastered';
     else if (recentAccuracy > 0 && recentAccuracy < 0.5) status = 'weak';
 
     return {
@@ -120,25 +136,30 @@ function normalizeDungeon(dungeon, player) {
 }
 
 async function startDungeonSession(requestedDungeonId) {
-  const player = await currentPlayer();
-  let dungeon;
-  try {
-    dungeon = await request(`/game/dungeon/${requestedDungeonId}`);
-  } catch (error) {
-    if (error.code !== 404) throw error;
-    const available = await request('/game/dungeons');
-    if (!available.length) throw new Error('No dungeon has been seeded.');
-    dungeon = await request(`/game/dungeon/${available[0].dungeon_id}`);
-  }
+  // Keyed on a fixed name, not requestedDungeonId: getDungeon('') and
+  // enterRoom()'s no-session fallback can both call this for the same
+  // player at nearly the same time and must collapse into one session.
+  return dedupe('session-start', async () => {
+    const player = await currentPlayer();
+    let dungeon;
+    try {
+      dungeon = await request(`/game/dungeon/${requestedDungeonId}`);
+    } catch (error) {
+      if (error.code !== 404) throw error;
+      const available = await request('/game/dungeons');
+      if (!available.length) throw new Error('No dungeon has been seeded.');
+      dungeon = await request(`/game/dungeon/${available[0].dungeon_id}`);
+    }
 
-  const session = await request('/game/session/start', {
-    method: 'POST',
-    body: { player_id: player.player_id, dungeon_id: dungeon.dungeon_id },
+    const session = await request('/game/session/start', {
+      method: 'POST',
+      body: { player_id: player.player_id, dungeon_id: dungeon.dungeon_id },
+    });
+    live.sessionId = session.session_id;
+    live.dungeon = dungeon;
+    persistLiveState();
+    return normalizeDungeon(dungeon, player);
   });
-  live.sessionId = session.session_id;
-  live.dungeon = dungeon;
-  persistLiveState();
-  return normalizeDungeon(dungeon, player);
 }
 
 export const auth = {
@@ -159,6 +180,11 @@ export const auth = {
   },
 
   me: async () => (USE_MOCK ? mock.me() : rememberPlayer(await currentPlayer())),
+
+  setHero: async (playerId, heroId) =>
+    USE_MOCK
+      ? mock.setHero(playerId, heroId)
+      : request(`/game/player/${playerId}/hero`, { method: 'POST', body: { hero_id: heroId } }),
 };
 
 export const game = {
@@ -167,34 +193,43 @@ export const game = {
 
   enterRoom: async (topic) => {
     if (USE_MOCK) return mock.enterRoom(topic);
-    hydrateLiveState();
-    if (!live.sessionId || !live.dungeon) await startDungeonSession('');
-    const room =
-      topic === 'boss'
-        ? live.dungeon.rooms.find((candidate) => candidate.is_boss)
-        : live.dungeon.rooms.find((candidate) => candidate.topic === topic);
-    if (!room) throw new Error(`No room exists for ${topic}.`);
+    // Each call to enterRoom(topic) triggers a real (potentially multi-second)
+    // Gemini question-generation round trip -- collapse duplicate concurrent
+    // calls for the same topic into one.
+    return dedupe(`enterRoom:${topic}`, async () => {
+      hydrateLiveState();
+      if (!live.sessionId || !live.dungeon) await startDungeonSession('');
+      const room =
+        topic === 'boss'
+          ? live.dungeon.rooms.find((candidate) => candidate.is_boss)
+          : live.dungeon.rooms.find((candidate) => candidate.topic === topic);
+      if (!room) throw new Error(`No room exists for ${topic}.`);
 
-    const response = await request('/game/room/enter', {
-      method: 'POST',
-      body: { session_id: live.sessionId, room_id: room.room_id },
+      const response = await request('/game/room/enter', {
+        method: 'POST',
+        body: { session_id: live.sessionId, room_id: room.room_id },
+      });
+      // hits_required/hits_landed are recomputed server-side from real
+      // AnswerSubmission rows on every call -- always the ground truth, so
+      // there's no client-side "is this a continuing fight?" guess to get
+      // wrong. The HP bar is hits remaining, not the old flat difficulty HP
+      // pool, so it always reaches empty exactly when the room clears.
+      const enemyHp = response.hits_required - response.hits_landed;
+      live.combat = {
+        roomId: room.room_id,
+        topic,
+        enemyHp,
+        enemyHpMax: response.hits_required,
+        playerHp: live.combat?.roomId === room.room_id ? live.combat.playerHp : 100,
+      };
+      persistLiveState();
+      return {
+        ...response.question,
+        enemy_hp: enemyHp,
+        enemy_hp_max: live.combat.enemyHpMax,
+        enemy_name: topic === 'boss' ? 'The Big-O Devourer' : `${TOPIC_LABELS[topic] || topic} Wraith`,
+      };
     });
-    const continuing = live.combat?.roomId === room.room_id && live.combat.enemyHp > 0;
-    const enemyHp = continuing ? live.combat.enemyHp : response.enemy_hp;
-    live.combat = {
-      roomId: room.room_id,
-      topic,
-      enemyHp,
-      enemyHpMax: continuing ? live.combat.enemyHpMax : response.enemy_hp,
-      playerHp: live.combat?.playerHp ?? 100,
-    };
-    persistLiveState();
-    return {
-      ...response.question,
-      enemy_hp: enemyHp,
-      enemy_hp_max: live.combat.enemyHpMax,
-      enemy_name: topic === 'boss' ? 'The Big-O Devourer' : `${TOPIC_LABELS[topic] || topic} Wraith`,
-    };
   },
 
   submitAnswer: async (payload) => {
@@ -206,7 +241,10 @@ export const game = {
     });
     const damageTaken = result.verdict === 'incorrect' ? 18 : result.verdict === 'partial' ? 8 : 0;
     live.combat = live.combat || { enemyHp: 0, enemyHpMax: 0, playerHp: 100 };
-    live.combat.enemyHp = Math.max(0, live.combat.enemyHp - result.damage_dealt);
+    if (typeof result.hits_required === 'number') {
+      live.combat.enemyHpMax = result.hits_required;
+      live.combat.enemyHp = Math.max(0, result.hits_required - result.hits_landed);
+    }
     live.combat.playerHp = Math.max(0, live.combat.playerHp - damageTaken);
     persistLiveState();
     return {
@@ -223,7 +261,7 @@ export const game = {
   },
 
   useHint: async (playerId, questionId) => {
-    if (USE_MOCK) return { ok: true };
+    if (USE_MOCK) return mock.useHint(playerId, questionId);
     return request('/game/hint/use', {
       method: 'POST',
       body: { player_id: playerId, question_id: questionId },
@@ -270,6 +308,23 @@ export const game = {
     persistLiveState();
     return { ok: true };
   },
+
+  usePowerup: async (playerId, questionId) => {
+    if (USE_MOCK) return mock.usePowerup(playerId, questionId);
+    const result = await request('/game/powerup/use', {
+      method: 'POST',
+      body: { player_id: playerId, question_id: questionId },
+    });
+    // force_correct/force_correct_heal don't touch HP immediately -- they
+    // queue a guaranteed-correct verdict the backend applies on the next
+    // /answer/submit, which then reports the real hits_required/hits_landed.
+    // heal_to_full is the one immediate effect (player HP has no server pool).
+    if (live.combat && result.heal_to_full) {
+      live.combat.playerHp = live.combat.playerHpMax ?? 100;
+      persistLiveState();
+    }
+    return { ...result, enemy_hp_after: live.combat?.enemyHp, player_hp_after: live.combat?.playerHp };
+  },
 };
 
 export const ai = {
@@ -279,8 +334,8 @@ export const ai = {
     const nodes = Object.entries(TOPIC_GRAPH).map(([topic]) => ({
       id: topic,
       label: TOPIC_LABELS[topic] || topic,
-      accuracy: data.topic_accuracies[topic] ?? 0,
-      status: data.graph_state[topic] || 'locked',
+      accuracy: data.topic_accuracies?.[topic] ?? 0,
+      status: data.graph_state?.[topic] || 'locked',
     }));
     const edges = Object.entries(TOPIC_GRAPH).flatMap(([target, prerequisites]) =>
       prerequisites.map((source) => ({ source, target }))

@@ -6,7 +6,7 @@ import MLDashboard from '@/components/MLDashboard';
 
 export default function DashboardPage() {
   const { ready } = useRequireAuth();
-  const { player } = useAuthStore();
+  const player = useAuthStore((s) => s.player);
 
   if (!ready || !player) return null;
 

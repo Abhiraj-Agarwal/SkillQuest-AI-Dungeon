@@ -13,7 +13,7 @@ const PILLARS = [
 ];
 
 export default function LandingPage() {
-  const { isAuthenticated } = useAuthStore();
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
 
   return (
     <div
@@ -25,10 +25,13 @@ export default function LandingPage() {
     >
       <div>
         <PixelBadge tone="arcane" className="mb-4">DATA STRUCTURES & ALGORITHMS</PixelBadge>
-        <h1 className="font-display text-2xl md:text-4xl text-parchment leading-relaxed">
-          CODECRYPT
-        </h1>
-        <p className="font-display text-xs md:text-sm text-ember mt-2">THE AI DUNGEON</p>
+        {/* eslint-disable-next-line @next/next/no-img-element -- fixed local
+            asset, not a candidate for next/image's remote optimization pipeline */}
+        <img
+          src="/sprites/bats/logo.png"
+          alt="CodeCrypt: The AI Dungeon"
+          style={{ imageRendering: 'pixelated', maxWidth: '100%', height: 'auto' }}
+        />
       </div>
 
       <p className="font-body text-xl text-parchment-dim max-w-xl">

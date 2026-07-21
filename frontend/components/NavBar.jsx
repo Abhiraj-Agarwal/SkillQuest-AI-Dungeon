@@ -3,13 +3,16 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Menu, X, Sword, ScrollText, Users, Trophy, BrainCircuit } from 'lucide-react';
+import { Menu, X, Sword, ScrollText, Users, Trophy, BrainCircuit, HelpCircle } from 'lucide-react';
 import clsx from 'clsx';
 import { useAuthStore } from '@/store/useAuthStore';
+import { useOnboardingStore } from '@/store/useOnboardingStore';
+import PixelSprite from './PixelSprite';
+import { heroOrDefault } from '@/lib/sprites/heroSprites';
 
 const LINKS = [
   { href: '/dungeon', label: 'Dungeon', icon: Sword },
-  { href: '/stats', label: 'Stats', icon: ScrollText },
+  { href: '/stats', label: 'Profile', icon: ScrollText },
   { href: '/guild', label: 'Guild', icon: Users },
   { href: '/leaderboard', label: 'Ranks', icon: Trophy },
   { href: '/dashboard', label: 'AI Core', icon: BrainCircuit },
@@ -19,7 +22,10 @@ export default function NavBar() {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
-  const { player, isAuthenticated, logout } = useAuthStore();
+  const player = useAuthStore((s) => s.player);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const logout = useAuthStore((s) => s.logout);
+  const openOnboarding = useOnboardingStore((s) => s.openModal);
 
   if (!isAuthenticated) return null;
 
@@ -50,7 +56,25 @@ export default function NavBar() {
         </div>
 
         <div className="hidden md:flex items-center gap-3">
-          <span className="font-body text-parchment-dim text-sm">{player?.username}</span>
+          <button
+            onClick={openOnboarding}
+            aria-label="How to play"
+            title="How to play"
+            className="text-parchment-dim hover:text-arcane"
+          >
+            <HelpCircle size={20} />
+          </button>
+          <Link href="/stats" className="flex items-center gap-2 hover:opacity-80">
+            <PixelSprite
+              src={heroOrDefault(player?.hero_id).image}
+              grid={heroOrDefault(player?.hero_id).grid}
+              palette={heroOrDefault(player?.hero_id).palette}
+              size={28}
+              title={heroOrDefault(player?.hero_id).name}
+              className="border-2 border-black shrink-0"
+            />
+            <span className="font-body text-parchment-dim text-sm">{player?.username}</span>
+          </Link>
           <button
             onClick={handleLogout}
             className="font-display text-[9px] bg-blood text-parchment px-2 py-2 border-2 border-black"
@@ -62,9 +86,33 @@ export default function NavBar() {
 
       {open && (
         <div className="md:hidden border-t-4 border-black bg-stone-dark px-4 py-3 flex flex-col gap-3">
+          <Link
+            href="/stats"
+            onClick={() => setOpen(false)}
+            className="flex items-center gap-2 px-2 py-1 hover:opacity-80"
+          >
+            <PixelSprite
+              src={heroOrDefault(player?.hero_id).image}
+              grid={heroOrDefault(player?.hero_id).grid}
+              palette={heroOrDefault(player?.hero_id).palette}
+              size={28}
+              title={heroOrDefault(player?.hero_id).name}
+              className="border-2 border-black shrink-0"
+            />
+            <span className="font-body text-parchment-dim text-sm">{player?.username}</span>
+          </Link>
           {LINKS.map((l) => (
             <NavLink key={l.href} {...l} active={pathname.startsWith(l.href)} onClick={() => setOpen(false)} />
           ))}
+          <button
+            onClick={() => {
+              openOnboarding();
+              setOpen(false);
+            }}
+            className="font-display text-[9px] flex items-center gap-2 px-2 py-2 text-parchment-dim"
+          >
+            <HelpCircle size={14} /> HOW TO PLAY
+          </button>
           <button
             onClick={handleLogout}
             className="font-display text-[9px] bg-blood text-parchment px-3 py-2 border-2 border-black self-start mt-1"
