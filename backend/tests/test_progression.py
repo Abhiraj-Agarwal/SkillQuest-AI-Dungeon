@@ -134,3 +134,36 @@ def test_unlock_does_not_regress_after_a_later_accuracy_dip():
         )
     finally:
         db.close()
+
+
+def test_clearing_a_room_unlocks_downstream_topics_even_at_low_accuracy():
+    """Reported as 'I finished recursion but the dungeon still shows 60% and
+    downstream rooms stayed locked.' recent_accuracy is a last-5-answers
+    rolling window, not a room-clear counter -- 3 correct out of 5 total
+    attempts clears a 3-hit room (the actual win condition) while sitting at
+    only 60% rolling accuracy, well under the 65% unlock threshold. A player
+    who beat the room's villain has earned the unlock regardless."""
+    db, dungeon, alpha, _beta, rooms = build_world()
+    try:
+        assert rooms["recursion"].enemy_count == 3  # default from the Room model
+
+        db.add(AccuracyHistory(
+            player_id=alpha.player_id, topic="recursion",
+            correct=3, attempts=5, recent_accuracy=0.6,
+        ))
+        db.commit()
+
+        # trees needs both linked_lists and recursion -- linked_lists isn't
+        # proven yet, so trees should still be locked on that alone.
+        assert not _is_room_unlocked_for_player(
+            db, alpha.player_id, rooms["trees"], dungeon.dungeon_id
+        )
+
+        set_accuracy(db, alpha, "linked_lists", 0.8)
+        # Now that linked_lists is proven too, trees should unlock purely
+        # from recursion being cleared -- not from recursion's 60% accuracy.
+        assert _is_room_unlocked_for_player(
+            db, alpha.player_id, rooms["trees"], dungeon.dungeon_id
+        )
+    finally:
+        db.close()

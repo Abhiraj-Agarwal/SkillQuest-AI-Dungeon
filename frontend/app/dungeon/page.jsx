@@ -130,7 +130,7 @@ export default function DungeonMapPage() {
                 </span>
                 {!locked && (
                   <span className="font-body text-sm text-parchment-dim">
-                    {Math.round(room.recent_accuracy * 100)}%
+                    {Math.round(room.completion * 100)}%
                   </span>
                 )}
               </button>
