@@ -17,8 +17,14 @@ from services.knowledge_graph import TOPIC_GRAPH
 # so bosses genuinely differ in how much of a fight they put up. The final
 # boss's pool is drawn from its own, dramatically larger band -- meant to
 # read as unequaled next to every topic boss.
-TOPIC_HP_RANGE = (140, 320)
-BOSS_HP_RANGE = (900, 1400)
+#
+# Sized so a perfect-score answer takes roughly 3 hits on a hard question, 5
+# on medium, 7 on easy -- using services/llm_engine.py's DAMAGE_RANGE_BY_DIFFICULTY
+# midpoints (easy ~55, medium ~90, hard ~135 max_damage): 425 / 135 =~ 3.1,
+# 425 / 90 =~ 4.7, 425 / 55 =~ 7.7. A single hit should never come close to a
+# one-shot kill, regardless of which difficulty tier answered it.
+TOPIC_HP_RANGE = (350, 500)
+BOSS_HP_RANGE = (1000, 1700)
 
 
 def seed_database():
@@ -47,19 +53,33 @@ def seed_database():
             db.commit()
             print("Migrated dungeon to a dedicated boss room.")
 
-        # One-time backfill: rooms created before boss HP was randomized all
-        # share the same flat enemy_count=3 (topics) / 5 (boss) placeholder
-        # from the old "3 correct answers always clears it" design -- an
-        # existing dev database wouldn't otherwise ever pick up varied HP.
-        stale_rooms = db.query(Room).filter(
-            Room.dungeon_id == existing.dungeon_id,
-            Room.enemy_count.in_([3, 5]),
-        ).all()
+        # One-time migration: any room whose enemy_count sits below the
+        # current range's floor is left over from an earlier, smaller HP
+        # scale (either the original flat 3/5 placeholder, or an earlier
+        # randomized-but-too-low band) -- re-roll it into the current range.
+        # Every AccuracyHistory row on that topic has its damage_dealt
+        # rescaled by the same ratio the room's HP just changed by, so a
+        # room's percent-complete (damage_dealt / enemy_count) stays exactly
+        # what it was before the rescale -- a 100%-cleared room doesn't
+        # suddenly regress to 40% complete just because the pool got bigger.
+        stale_rooms = [
+            room for room in existing.rooms
+            if room.enemy_count < (BOSS_HP_RANGE[0] if room.is_boss else TOPIC_HP_RANGE[0])
+        ]
         if stale_rooms:
+            histories_by_topic: dict[str, list[AccuracyHistory]] = {}
+            for history in db.query(AccuracyHistory).all():
+                histories_by_topic.setdefault(history.topic, []).append(history)
             for room in stale_rooms:
-                room.enemy_count = random.randint(*BOSS_HP_RANGE) if room.is_boss else random.randint(*TOPIC_HP_RANGE)
+                old_enemy_count = room.enemy_count or 1
+                new_enemy_count = random.randint(*BOSS_HP_RANGE) if room.is_boss else random.randint(*TOPIC_HP_RANGE)
+                ratio = new_enemy_count / old_enemy_count
+                for history in histories_by_topic.get(room.topic, []):
+                    if history.damage_dealt:
+                        history.damage_dealt = round(history.damage_dealt * ratio)
+                room.enemy_count = new_enemy_count
             db.commit()
-            print(f"Backfilled varied boss HP onto {len(stale_rooms)} room(s).")
+            print(f"Rescaled HP (and proportional damage_dealt) onto {len(stale_rooms)} room(s).")
 
         # One-time backfill: AccuracyHistory rows written before damage_dealt
         # existed have no record of it (defaults to 0), even for topics a
@@ -71,7 +91,8 @@ def seed_database():
         # old universal clear threshold, so it's used here (not `mastered` or
         # `recent_accuracy`, which are a different, already-independent proof
         # path and would falsely mark a barely-started-but-mastered topic as
-        # fully cleared).
+        # fully cleared). Runs after the HP rescale above so it stamps the
+        # room's current (already-final) enemy_count, not a stale one.
         rooms_by_topic = {room.topic: room for room in existing.rooms}
         histories = db.query(AccuracyHistory).all()
         backfilled = 0
@@ -89,8 +110,9 @@ def seed_database():
             db.commit()
             print(f"Backfilled damage_dealt for {backfilled} previously-cleared room(s).")
         print("Database already seeded.")
+        dungeon_id = existing.dungeon_id
         db.close()
-        return existing.dungeon_id
+        return dungeon_id
 
     # Create dungeon
     dungeon = Dungeon(name="DSA Fundamentals", domain="Data Structures & Algorithms")
