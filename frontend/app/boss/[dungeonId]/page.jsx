@@ -15,7 +15,7 @@ import DamageNumber from '@/components/DamageNumber';
 import VillainSprite from '@/components/VillainSprite';
 import PowerupButton from '@/components/PowerupButton';
 import PixelSprite from '@/components/PixelSprite';
-import { heroOrDefault } from '@/lib/sprites/heroSprites';
+import { heroOrDefault, queuedPowerupText } from '@/lib/sprites/heroSprites';
 
 const VERDICT_TONE = { correct: 'arcane', partial: 'gold', incorrect: 'blood' };
 const BOSS_TOPIC = 'boss';
@@ -144,7 +144,10 @@ export default function BossFightPage() {
       <PixelPanel className="border-ember">
         <div className="flex justify-between items-center mb-2">
           <span className="font-display text-[10px] text-ember">THE BIG-O DEVOURER</span>
-          <PixelBadge tone="ember">{currentQuestion.difficulty}</PixelBadge>
+          <div className="flex items-center gap-2">
+            <PixelBadge tone="ember">{currentQuestion.difficulty}</PixelBadge>
+            <PixelBadge tone="gold">up to {currentQuestion.max_damage} DMG</PixelBadge>
+          </div>
         </div>
         <div className="flex items-center gap-4">
           <VillainSprite topic="boss" hitKey={lastResult?.submission_id} defeated={bossDefeated} size={88} />
@@ -180,7 +183,7 @@ export default function BossFightPage() {
           {powerupResult && !powerupError && (
             <span className="font-body text-gold text-sm">
               {powerupResult.powerup_name} used!
-              {powerupResult.queued ? ' Your next answer lands as a guaranteed critical hit.' : ''}
+              {powerupResult.queued ? ` ${queuedPowerupText(player.hero_id)}` : ''}
               {powerupResult.xp_awarded ? ` +${powerupResult.xp_awarded} XP` : ''}
             </span>
           )}

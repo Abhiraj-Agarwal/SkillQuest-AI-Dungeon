@@ -28,10 +28,14 @@ def calculate_level(total_xp: int) -> int:
     return math.floor(total_xp / 100) + 1
 
 
-def calculate_damage(damage_multiplier: float, player_level: int) -> int:
-    """Calculate damage dealt to enemy."""
-    base_damage = 10 * player_level
-    return int(base_damage * damage_multiplier)
+def calculate_damage(max_damage: int, score: float) -> int:
+    """Damage dealt to the boss: the question's ceiling (max_damage, reached
+    only at a perfect NLP score of 1.0) scaled down by however close the
+    actual score came to that. A hard question's max_damage is higher than
+    an easy one's, so the same score deals more damage on a harder question
+    -- deliberately, per the actual design intent (reward tackling harder
+    material), not an accident of a flat per-level damage formula."""
+    return round(max_damage * max(0.0, min(1.0, score)))
 
 
 def check_room_clear(correct_in_room: int, enemy_count: int) -> bool:

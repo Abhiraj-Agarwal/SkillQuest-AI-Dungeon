@@ -23,6 +23,11 @@ class AccuracyHistory(Base):
     # (last_5_results is a rolling window) would re-lock rooms they already
     # legitimately opened -- see _is_room_unlocked_for_player in routes/game.py.
     mastered = Column(Boolean, default=False)
+    # Cumulative damage dealt to this topic's boss across every submission
+    # ever made for it -- the single running total both the in-fight HP bar
+    # (hits_required/hits_landed) and the room-clear/unlock-proof checks read
+    # from, so they can never disagree about whether the boss is dead.
+    damage_dealt = Column(Integer, default=0)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc),
                         onupdate=lambda: datetime.now(timezone.utc))
 

@@ -4,6 +4,7 @@ Real AI endpoints — powered by Gemini for question generation and answer judgi
 import os
 import uuid
 import json
+import random
 import re
 import asyncio
 from fastapi import APIRouter
@@ -19,6 +20,16 @@ model = genai.GenerativeModel(os.getenv("LLM_MODEL", "gemini-flash-lite-latest")
 router = APIRouter(prefix="/ai", tags=["AI (Gemini)"])
 
 DEFAULT_DOMAIN = os.getenv("DEFAULT_DOMAIN", "Data Structures & Algorithms")
+
+# Mirrors services/services/llm_engine.py's DAMAGE_RANGE_BY_DIFFICULTY --
+# keep both in sync if you change one. This route is a self-contained
+# fallback (used only if AI_SERVICE_URL points back at this same server
+# instead of the standalone services/ process); the live path is services/.
+DAMAGE_RANGE_BY_DIFFICULTY = {
+    "easy": (40, 70),
+    "medium": (70, 110),
+    "hard": (110, 160),
+}
 
 
 def _parse_json_from_response(text: str) -> dict:
@@ -68,13 +79,18 @@ async def generate_question(body: dict):
     topic = body.get("topic", "arrays")
     difficulty = body.get("difficulty", "medium")
     domain = body.get("domain", DEFAULT_DOMAIN)
+    monster_name = body.get("monster_name") or "the dungeon's guardian"
+    damage_low, damage_high = DAMAGE_RANGE_BY_DIFFICULTY.get(difficulty, (70, 110))
+    max_damage = random.randint(damage_low, damage_high)
 
-    prompt = f"""You are a dungeon monster in an educational RPG.
+    prompt = f"""You are {monster_name}, a dungeon monster in an educational RPG.
 Topic: {topic}
 Difficulty: {difficulty}  # easy = recall, medium = application, hard = analysis/synthesis
 Subject domain: {domain}
 
-Generate a single exam-quality question for a student fighting you.
+Generate a single exam-quality question for a student fighting you. Stay in
+character as {monster_name} throughout the question text -- do not invent,
+name, or reference any other monster or creature.
 The question must be unique and different each time.
 For easy: test basic recall and definitions.
 For medium: test application and problem-solving.
@@ -102,6 +118,7 @@ Respond in JSON only, no preamble:
             "hint": data.get("hint", "Think carefully about this topic."),
             "topic": topic,
             "difficulty": difficulty,
+            "max_damage": max_damage,
         }
     except Exception as e:
         print(f"[AI] Question generation failed completely: {e}")
@@ -115,6 +132,7 @@ Respond in JSON only, no preamble:
         "hint": "Think about the fundamentals.",
         "topic": topic,
         "difficulty": difficulty,
+        "max_damage": max_damage,
     }
 
 

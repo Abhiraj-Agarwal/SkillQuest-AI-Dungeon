@@ -24,11 +24,14 @@ def _get_client() -> httpx.AsyncClient:
     return _client
 
 
-async def call_generate_question(player_id: str, topic: str, difficulty: str = "medium", domain: str = None) -> dict:
+async def call_generate_question(
+    player_id: str, topic: str, difficulty: str = "medium", domain: str = None, monster_name: str = None,
+) -> dict:
     """Call the question generation endpoint (mock or real)."""
     resp = await _get_client().post(f"{AI_SERVICE_URL}/ai/question/generate", json={
         "player_id": player_id, "topic": topic,
         "difficulty": difficulty, "domain": domain or DEFAULT_DOMAIN,
+        "monster_name": monster_name,
     }, timeout=60.0)  # must exceed ai_real.py's worst-case ~45s Gemini retry backoff
     resp.raise_for_status()
     return resp.json()

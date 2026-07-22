@@ -17,7 +17,7 @@ import VillainSprite from '@/components/VillainSprite';
 import PowerupButton from '@/components/PowerupButton';
 import PixelSprite from '@/components/PixelSprite';
 import { monsterForTopic } from '@/lib/sprites/monsterSprites';
-import { heroOrDefault } from '@/lib/sprites/heroSprites';
+import { heroOrDefault, queuedPowerupText } from '@/lib/sprites/heroSprites';
 
 const VERDICT_TONE = { correct: 'arcane', partial: 'gold', incorrect: 'blood' };
 
@@ -86,7 +86,7 @@ export default function CombatPage() {
   if (enteringRoom && !currentQuestion) {
     return (
       <p className="font-body text-arcane text-center mt-10 animate-flicker">
-        The {monsterForTopic(topic).name} of {TOPIC_LABELS[topic] || topic} stirs… generating a challenge.
+        {monsterForTopic(topic).name} of {TOPIC_LABELS[topic] || topic} stirs… generating a challenge.
       </p>
     );
   }
@@ -135,9 +135,12 @@ export default function CombatPage() {
       <PixelPanel variant="arcane">
         <div className="flex justify-between items-center mb-2">
           <span className="font-display text-[10px] text-ember">{combat.enemyName}</span>
-          <PixelBadge tone={combat.enemyName.includes('Devourer') ? 'ember' : 'arcane'}>
-            {currentQuestion.difficulty}
-          </PixelBadge>
+          <div className="flex items-center gap-2">
+            <PixelBadge tone={combat.enemyName.includes('Devourer') ? 'ember' : 'arcane'}>
+              {currentQuestion.difficulty}
+            </PixelBadge>
+            <PixelBadge tone="gold">up to {currentQuestion.max_damage} DMG</PixelBadge>
+          </div>
         </div>
         <div className="flex items-center gap-4">
           <VillainSprite topic={topic} hitKey={lastResult?.submission_id} defeated={enemyDefeated} />
@@ -173,7 +176,7 @@ export default function CombatPage() {
           {powerupResult && !powerupError && (
             <span className="font-body text-gold text-sm">
               {powerupResult.powerup_name} used!
-              {powerupResult.queued ? ' Your next answer lands as a guaranteed critical hit.' : ''}
+              {powerupResult.queued ? ` ${queuedPowerupText(player.hero_id)}` : ''}
               {powerupResult.xp_awarded ? ` +${powerupResult.xp_awarded} XP` : ''}
             </span>
           )}
