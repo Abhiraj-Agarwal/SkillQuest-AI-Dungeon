@@ -8,6 +8,7 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { game } from '@/lib/api/client';
 import PixelPanel from '@/components/ui/PixelPanel';
 import PixelBadge from '@/components/ui/PixelBadge';
+import PixelButton from '@/components/ui/PixelButton';
 import PixelSprite from '@/components/PixelSprite';
 import { heroOrDefault } from '@/lib/sprites/heroSprites';
 
@@ -17,7 +18,7 @@ export default function LeaderboardPage() {
   const { ready } = useRequireAuth();
   const player = useAuthStore((s) => s.player);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['leaderboard'],
     queryFn: () => game.getLeaderboard(),
     enabled: ready,
@@ -37,6 +38,11 @@ export default function LeaderboardPage() {
       <PixelPanel>
         {isLoading ? (
           <p className="font-body text-parchment-dim">Tallying the realm&apos;s XP…</p>
+        ) : isError ? (
+          <div className="flex flex-col items-center gap-3">
+            <p className="font-body text-blood">Could not load the leaderboard.</p>
+            <PixelButton variant="ghost" onClick={() => refetch()}>RETRY</PixelButton>
+          </div>
         ) : (
           <div className="flex flex-col gap-2">
             {board.map((row, i) => {

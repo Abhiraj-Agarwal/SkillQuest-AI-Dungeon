@@ -11,6 +11,7 @@ import { layoutGraph } from '@/lib/graphLayout';
 import { DUNGEON_ID } from '@/lib/config';
 import PixelPanel from '@/components/ui/PixelPanel';
 import PixelBadge from '@/components/ui/PixelBadge';
+import PixelButton from '@/components/ui/PixelButton';
 import XPBar from '@/components/XPBar';
 import ChainLink from '@/components/ChainLink';
 import PixelSprite from '@/components/PixelSprite';
@@ -46,7 +47,12 @@ export default function DungeonMapPage() {
     return <p className="font-body text-parchment-dim text-center mt-10">Descending into the dungeon…</p>;
   }
   if (dungeonError) {
-    return <p className="font-body text-blood text-center mt-10">{dungeonError}</p>;
+    return (
+      <div className="flex flex-col items-center gap-3 mt-10">
+        <p className="font-body text-blood text-center">{dungeonError}</p>
+        <PixelButton variant="ghost" onClick={() => loadDungeon(DUNGEON_ID)}>RETRY</PixelButton>
+      </div>
+    );
   }
 
   const xs = dungeon.rooms.map((r) => positions[r.topic]?.x ?? 0);

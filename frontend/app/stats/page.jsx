@@ -8,6 +8,7 @@ import { STAT_MAP, TOPIC_LABELS } from '@/lib/statMap';
 import { heroOrDefault } from '@/lib/sprites/heroSprites';
 import PixelPanel from '@/components/ui/PixelPanel';
 import PixelBadge from '@/components/ui/PixelBadge';
+import PixelButton from '@/components/ui/PixelButton';
 import PixelSprite from '@/components/PixelSprite';
 import XPBar from '@/components/XPBar';
 
@@ -15,7 +16,7 @@ export default function StatSheetPage() {
   const { ready } = useRequireAuth();
   const player = useAuthStore((s) => s.player);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['player', player?.player_id],
     queryFn: () => game.getPlayer(player.player_id),
     enabled: ready && !!player,
@@ -77,6 +78,11 @@ export default function StatSheetPage() {
         <h2 className="font-display text-xs text-gold mb-4">CHARACTER STATS</h2>
         {isLoading ? (
           <p className="font-body text-parchment-dim">Reading your accuracy history…</p>
+        ) : isError ? (
+          <div className="flex flex-col items-center gap-3">
+            <p className="font-body text-blood">Could not load your stats.</p>
+            <PixelButton variant="ghost" onClick={() => refetch()}>RETRY</PixelButton>
+          </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {Object.entries(STAT_MAP).map(([topic, { stat, flavor }]) => {
