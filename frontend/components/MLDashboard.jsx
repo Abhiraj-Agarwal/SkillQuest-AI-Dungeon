@@ -17,6 +17,7 @@ import {
 } from 'recharts';
 import { ai } from '@/lib/api/client';
 import { layoutGraph } from '@/lib/graphLayout';
+import { TOPIC_LABELS } from '@/lib/statMap';
 import PixelPanel from './ui/PixelPanel';
 import PixelBadge from './ui/PixelBadge';
 import PixelSprite from './PixelSprite';
@@ -66,6 +67,7 @@ const STATUS_COLOR = {
 };
 
 const DIFFICULTY_VALUE = { easy: 1, medium: 2, hard: 3 };
+const VERDICT_TONE = { correct: 'arcane', partial: 'gold', incorrect: 'blood' };
 
 function StoneNode({ data }) {
   const monster = monsterForTopic(data.id);
@@ -197,6 +199,32 @@ export default function MLDashboard({ playerId }) {
           </ResponsiveContainer>
         </PixelPanel>
       </div>
+
+      <PixelPanel className="lg:col-span-3">
+        <h3 className="font-display text-xs text-gold mb-2">RECENT FIGHTS</h3>
+        {isLoading ? (
+          <p className="font-body text-parchment-dim">Loading recent fights…</p>
+        ) : (data?.score_history || []).length === 0 ? (
+          <p className="font-body text-parchment-dim">No fights recorded yet.</p>
+        ) : (
+          <div className="flex flex-col gap-2 max-h-80 overflow-y-auto">
+            {data.score_history.map((s, i) => (
+              <div key={i} className="border-2 border-black bg-stone-dark px-3 py-2">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <span className="font-body text-parchment">{TOPIC_LABELS[s.topic] || s.topic}</span>
+                  <div className="flex items-center gap-2">
+                    <PixelBadge tone="stone">{s.difficulty}</PixelBadge>
+                    <PixelBadge tone={VERDICT_TONE[s.verdict]}>{s.verdict}</PixelBadge>
+                    <span className="font-body text-sm text-parchment-dim">{Math.round(s.score * 100)}%</span>
+                  </div>
+                </div>
+                <p className="font-body text-sm text-parchment-dim mt-1">Q: {s.question}</p>
+                <p className="font-body text-sm text-parchment-dim">You: {s.player_answer}</p>
+              </div>
+            ))}
+          </div>
+        )}
+      </PixelPanel>
     </div>
   );
 }
