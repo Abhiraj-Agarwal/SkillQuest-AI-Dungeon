@@ -1,16 +1,23 @@
 """
-Tests for the hits-required/hits-landed combat model and the powerup rework
-that unified around it (see routes/game.py's _room_correct_count, enter_room,
-submit_answer, and use_powerup).
+Tests for the damage-based combat model (see routes/game.py's
+_topic_damage_total, enter_room, submit_answer, and use_powerup) and the
+powerup rework that manipulates the judge's continuous NLP score rather than
+a discrete verdict tier.
 
-Root bug this guards against: the villain HP bar used to be an arbitrary
-flat number (enemy_hp, sized off question difficulty) tracked independently
-of the real win condition (correct answers >= room.enemy_count). The two
-could disagree -- the bar could freeze well above or below empty relative to
-when the room actually cleared. These tests assert the bar (hits_required -
-hits_landed) always reaches exactly zero in the same response that reports
-room_cleared, across a full room-clear sequence, including forced-correct
-powerup hits.
+Root bugs this guards against:
+1. The villain HP bar used to be an arbitrary flat number tracked
+   independently of the real win condition (correct answers >=
+   room.enemy_count). These tests assert the bar (hits_required -
+   hits_landed, now damage points) always reaches exactly zero in the same
+   response that reports room_cleared.
+2. Every room previously cleared at a flat "3 correct answers" regardless of
+   the actual NLP score or the question's difficulty -- these tests assert
+   damage_dealt == round(max_damage * score) (zero only for "incorrect"),
+   so a harder question's higher max_damage ceiling and a better NLP score
+   both genuinely matter.
+3. Powerups (Titan's Smash / Valkyrie's Charge / Shadow Step) used to be
+   irrelevant once the combat model moved off flat hit-counting -- these
+   tests assert each one still measurably changes damage_dealt.
 
 Builds a standalone FastAPI app around just routes.game's router (not
 main:app) so this never touches the real skillquest.db or triggers demo
@@ -37,6 +44,7 @@ from models.question import Question  # noqa: F401
 from models.submission import AnswerSubmission  # noqa: F401
 from models.accuracy_history import AccuracyHistory  # noqa: F401
 import routes.game as game_routes
+from services.monsters import monster_name_for
 
 
 @pytest.fixture
@@ -65,20 +73,28 @@ def client(monkeypatch):
     app.dependency_overrides[get_db] = override_get_db
 
     # Deterministic stand-ins for the AI service calls -- these tests are
-    # about the combat/powerup bookkeeping, not the LLM integration.
-    verdict_box = {"verdict": "incorrect", "damage_multiplier": 0.0}
+    # about the combat/powerup bookkeeping, not the LLM integration. Score
+    # and verdict are set independently (unlike the old model, a "correct"
+    # verdict no longer implies score == 1.0), matching how the real judge
+    # returns a continuous NLP similarity score.
+    verdict_box = {"verdict": "incorrect", "score": 0.0, "damage_multiplier": 0.0, "max_damage": 100}
+    generate_calls = []
+    question_counter = {"n": 0}
 
-    async def fake_generate_question(player_id, topic, difficulty, domain):
+    async def fake_generate_question(player_id, topic, difficulty, domain, monster_name=None):
+        generate_calls.append({"topic": topic, "difficulty": difficulty, "monster_name": monster_name})
+        question_counter["n"] += 1
         return {
-            "question_id": f"q-{topic}-{difficulty}-{id(object())}",
+            "question_id": f"q-{topic}-{difficulty}-{question_counter['n']}",
             "question": f"Test question about {topic}",
             "expected_answer": "the correct answer",
             "hint": "a hint",
+            "max_damage": verdict_box["max_damage"],
         }
 
     async def fake_judge_answer(question_id, player_answer, expected_answer):
         return {
-            "score": 1.0 if verdict_box["verdict"] == "correct" else 0.0,
+            "score": verdict_box["score"],
             "damage_multiplier": verdict_box["damage_multiplier"],
             "verdict": verdict_box["verdict"],
             "feedback": "test feedback",
@@ -93,11 +109,12 @@ def client(monkeypatch):
 
     test_client = TestClient(app)
     test_client.verdict_box = verdict_box
+    test_client.generate_calls = generate_calls
     test_client._SessionLocal = TestingSessionLocal
     return test_client
 
 
-def _make_dungeon_and_room(client, enemy_count=3):
+def _make_dungeon_and_room(client, enemy_count=300):
     db = client._SessionLocal()
     dungeon = Dungeon(name="Test Dungeon", domain="DSA")
     db.add(dungeon)
@@ -132,46 +149,111 @@ def _enter_and_submit(client, session_id, room_id, player_id, answer_text="my an
 
 
 def test_room_enter_reports_hits_required_matching_enemy_count(client):
-    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=3)
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=300)
     player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
 
     entered = client.post("/game/room/enter", json={"session_id": session_id, "room_id": room_id}).json()
 
-    assert entered["hits_required"] == 3
+    assert entered["hits_required"] == 300
     assert entered["hits_landed"] == 0
+
+
+def test_room_enter_response_includes_max_damage(client):
+    dungeon_id, room_id = _make_dungeon_and_room(client)
+    player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
+    client.verdict_box["max_damage"] = 137
+
+    entered = client.post("/game/room/enter", json={"session_id": session_id, "room_id": room_id}).json()
+
+    assert entered["question"]["max_damage"] == 137
+
+
+def test_question_generation_is_told_the_room_topics_monster(client):
+    """Regression for the "minotaur in 5 different topics" bug: the AI call
+    must always be told which single monster it's voicing for this room, so
+    it can't wander into naming a different creature per question."""
+    dungeon_id, room_id = _make_dungeon_and_room(client)
+    player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
+
+    client.post("/game/room/enter", json={"session_id": session_id, "room_id": room_id})
+
+    assert len(client.generate_calls) == 1
+    assert client.generate_calls[0]["monster_name"] == monster_name_for("arrays")
 
 
 def test_hp_bar_reaches_exactly_zero_when_room_actually_clears(client):
     """The core regression test: hits_landed must reach hits_required in the
     exact same response where room_cleared flips true -- never before, never
-    after."""
-    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=3)
+    after. A perfect (score 1.0) answer against a 100-damage-ceiling question
+    deals exactly 100 damage per hit against a 300 HP boss."""
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=300)
     player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
     client.verdict_box["verdict"] = "correct"
-    client.verdict_box["damage_multiplier"] = 2.0
+    client.verdict_box["score"] = 1.0
+    client.verdict_box["max_damage"] = 100
 
-    for expected_hits in (1, 2, 3):
+    for expected_hits in (100, 200, 300):
         _, result = _enter_and_submit(client, session_id, room_id, player_id)
+        assert result["damage_dealt"] == 100
         assert result["hits_landed"] == expected_hits
-        assert result["hits_required"] == 3
-        assert result["room_cleared"] == (expected_hits == 3)
+        assert result["hits_required"] == 300
+        assert result["room_cleared"] == (expected_hits == 300)
 
 
 def test_incorrect_answers_never_move_the_hp_bar(client):
-    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=3)
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=300)
     player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
     client.verdict_box["verdict"] = "incorrect"
-    client.verdict_box["damage_multiplier"] = 0.0
+    client.verdict_box["score"] = 0.1
 
     for _ in range(5):
         _, result = _enter_and_submit(client, session_id, room_id, player_id)
+        assert result["damage_dealt"] == 0
         assert result["hits_landed"] == 0
         assert result["room_cleared"] is False
 
 
-def test_force_correct_powerup_lands_a_hit_regardless_of_judge_verdict(client):
-    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=3)
+def test_damage_scales_with_score_not_just_verdict(client):
+    """The heart of the rework: the same "partial" verdict at different NLP
+    scores must deal proportionally different damage against the same
+    question's max_damage ceiling -- not a flat per-tier amount."""
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=10_000)
     player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
+    client.verdict_box["max_damage"] = 100
+
+    client.verdict_box["verdict"] = "partial"
+    client.verdict_box["score"] = 0.5
+    _, low = _enter_and_submit(client, session_id, room_id, player_id)
+    assert low["damage_dealt"] == 50
+
+    client.verdict_box["verdict"] = "correct"
+    client.verdict_box["score"] = 0.91
+    _, high = _enter_and_submit(client, session_id, room_id, player_id)
+    assert high["damage_dealt"] == 91
+
+
+def test_harder_question_outdamages_easier_one_at_the_same_score(client):
+    """A perfect score on a high-ceiling (harder) question must deal more
+    damage than a perfect score on a low-ceiling (easier) one -- the whole
+    point of tying max_damage to difficulty."""
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=10_000)
+    player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
+    client.verdict_box["verdict"] = "correct"
+    client.verdict_box["score"] = 1.0
+
+    client.verdict_box["max_damage"] = 50
+    _, easy = _enter_and_submit(client, session_id, room_id, player_id)
+
+    client.verdict_box["max_damage"] = 150
+    _, hard = _enter_and_submit(client, session_id, room_id, player_id)
+
+    assert hard["damage_dealt"] > easy["damage_dealt"]
+
+
+def test_force_correct_powerup_deals_full_max_damage_regardless_of_judge(client):
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=10_000)
+    player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
+    client.verdict_box["max_damage"] = 120
 
     hero_resp = client.post(f"/game/player/{player_id}/hero", json={"hero_id": "titan_warrior"})
     assert hero_resp.status_code == 200
@@ -180,17 +262,19 @@ def test_force_correct_powerup_lands_a_hit_regardless_of_judge_verdict(client):
     assert powerup_resp.status_code == 200
     assert powerup_resp.json()["queued"] is True
 
-    # Judge says incorrect -- the queued force_correct should override it.
+    # Judge says a near-zero-score incorrect answer -- the queued
+    # force_correct should override both the verdict and the score outright.
     client.verdict_box["verdict"] = "incorrect"
-    client.verdict_box["damage_multiplier"] = 0.0
+    client.verdict_box["score"] = 0.05
     _, result = _enter_and_submit(client, session_id, room_id, player_id, "definitely wrong")
 
     assert result["verdict"] == "correct"
-    assert result["hits_landed"] == 1
+    assert result["score"] == 1.0
+    assert result["damage_dealt"] == 120
 
 
 def test_powerup_cooldown_enforced_after_max_uses(client):
-    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=5)
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=500)
     player_id, _session_id = _register_and_start(client, "alpha", dungeon_id)
     client.post(f"/game/player/{player_id}/hero", json={"hero_id": "titan_warrior"})
 
@@ -211,19 +295,22 @@ def test_unknown_hero_id_rejected(client):
 
 
 def test_hits_landed_never_exceeds_hits_required_even_with_stray_submissions(client):
-    """Guards the min(room.enemy_count, correct_count) clamp -- a player who
-    somehow racks up more correct answers for a topic than the room asks for
+    """Guards the min(boss_max_hp, cumulative_damage) clamp -- a player who
+    somehow deals more cumulative damage to a topic than its boss's HP pool
     (e.g. replaying a room) should never show a negative or over-100% bar."""
-    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=1)
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=50)
     player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
     client.verdict_box["verdict"] = "correct"
-    client.verdict_box["damage_multiplier"] = 2.0
+    client.verdict_box["score"] = 1.0
+    client.verdict_box["max_damage"] = 100  # deals more than the boss's whole HP pool in one hit
 
     _, first = _enter_and_submit(client, session_id, room_id, player_id)
     assert first["room_cleared"] is True
-    assert first["hits_landed"] == 1
+    assert first["hits_landed"] == 50
+    assert first["damage_dealt"] == 100  # the raw hit itself is uncapped...
 
-    # Re-entering an already-cleared room still reports a clamped, sane value.
+    # ...but re-entering an already-cleared room still reports a clamped,
+    # sane HP-bar value (never over 100%).
     entered_again = client.post(
         "/game/room/enter", json={"session_id": session_id, "room_id": room_id}
     ).json()
@@ -233,11 +320,12 @@ def test_hits_landed_never_exceeds_hits_required_even_with_stray_submissions(cli
 # ─── Audit: every one of the 6 hero powerups, end to end ───
 
 
-def test_force_correct_heal_queues_a_hit_and_heals_immediately(client):
+def test_force_correct_heal_queues_a_full_damage_hit_and_heals_immediately(client):
     """Freya Ironheart -- the other force_correct-family powerup, plus the
     one immediate (non-queued) effect: heal_to_full."""
-    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=3)
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=10_000)
     player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
+    client.verdict_box["max_damage"] = 90
     client.post(f"/game/player/{player_id}/hero", json={"hero_id": "valkyrie_warrior"})
 
     powerup_resp = client.post("/game/powerup/use", json={"player_id": player_id})
@@ -247,22 +335,22 @@ def test_force_correct_heal_queues_a_hit_and_heals_immediately(client):
     assert body["heal_to_full"] is True
 
     client.verdict_box["verdict"] = "incorrect"
-    client.verdict_box["damage_multiplier"] = 0.0
+    client.verdict_box["score"] = 0.0
     _, result = _enter_and_submit(client, session_id, room_id, player_id, "wrong on purpose")
     assert result["verdict"] == "correct"
-    assert result["hits_landed"] == 1
+    assert result["damage_dealt"] == 90
 
 
 def test_double_xp_next_exactly_doubles_the_next_answers_xp(client):
     """Zephyr the Sage -- compared against an identical control run with no
     powerup, rather than hand-deriving the XP formula's constants."""
-    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=3)
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=10_000)
     control_id, control_session = _register_and_start(client, "control", dungeon_id)
     powered_id, powered_session = _register_and_start(client, "powered", dungeon_id)
     client.post(f"/game/player/{powered_id}/hero", json={"hero_id": "sage_mage"})
 
     client.verdict_box["verdict"] = "correct"
-    client.verdict_box["damage_multiplier"] = 2.0
+    client.verdict_box["score"] = 1.0
 
     # Control player never touches the powerup endpoint at all -- a clean,
     # unmodified baseline to compare against.
@@ -276,26 +364,62 @@ def test_double_xp_next_exactly_doubles_the_next_answers_xp(client):
     assert powered_result["xp_gained"] == control_result["xp_gained"] * 2
 
 
-def test_verdict_boost_next_upgrades_incorrect_to_partial(client):
-    """Kael Shadowstep -- upgrades one tier; an incorrect answer should not
-    jump all the way to correct (that's Titan/Freya's job)."""
-    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=3)
+def test_score_boost_next_upgrades_incorrect_to_partial(client):
+    """Kael Shadowstep -- a flat +0.3 score boost (not a discrete tier jump)
+    can turn a below-partial-threshold score into a partial hit, and that
+    hit still deals proportional damage off the boosted score."""
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=10_000)
     player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
+    client.verdict_box["max_damage"] = 100
     client.post(f"/game/player/{player_id}/hero", json={"hero_id": "shadow_rogue"})
     client.post("/game/powerup/use", json={"player_id": player_id})
 
     client.verdict_box["verdict"] = "incorrect"
-    client.verdict_box["damage_multiplier"] = 0.0
+    client.verdict_box["score"] = 0.1  # + 0.3 boost = 0.4 -> partial (>= 0.30, < 0.65)
     _, result = _enter_and_submit(client, session_id, room_id, player_id, "shaky answer")
 
     assert result["verdict"] == "partial"
-    assert result["hits_landed"] == 0  # partial doesn't count toward room clear
+    assert result["score"] == pytest.approx(0.4)
+    assert result["damage_dealt"] == 40
+
+
+def test_score_boost_next_can_upgrade_partial_to_correct(client):
+    """The boost is real score math, not a capped one-tier jump -- a partial
+    answer close enough to the correct threshold should cross it."""
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=10_000)
+    player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
+    client.verdict_box["max_damage"] = 100
+    client.post(f"/game/player/{player_id}/hero", json={"hero_id": "shadow_rogue"})
+    client.post("/game/powerup/use", json={"player_id": player_id})
+
+    client.verdict_box["verdict"] = "partial"
+    client.verdict_box["score"] = 0.5  # + 0.3 boost = 0.8 -> correct (>= 0.65)
+    _, result = _enter_and_submit(client, session_id, room_id, player_id, "closer answer")
+
+    assert result["verdict"] == "correct"
+    assert result["score"] == pytest.approx(0.8)
+    assert result["damage_dealt"] == 80
+
+
+def test_score_boost_next_caps_at_a_perfect_score(client):
+    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=10_000)
+    player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
+    client.verdict_box["max_damage"] = 100
+    client.post(f"/game/player/{player_id}/hero", json={"hero_id": "shadow_rogue"})
+    client.post("/game/powerup/use", json={"player_id": player_id})
+
+    client.verdict_box["verdict"] = "correct"
+    client.verdict_box["score"] = 0.9  # + 0.3 would be 1.2, must cap at 1.0
+    _, result = _enter_and_submit(client, session_id, room_id, player_id, "great answer")
+
+    assert result["score"] == 1.0
+    assert result["damage_dealt"] == 100
 
 
 def test_free_hint_bonus_xp_reveals_hint_without_spending_a_token(client):
     """Lyra Mindweave -- awards XP and the real hint text, and must not cost
     a hint token the way /game/hint/use does."""
-    dungeon_id, room_id = _make_dungeon_and_room(client, enemy_count=3)
+    dungeon_id, room_id = _make_dungeon_and_room(client)
     player_id, session_id = _register_and_start(client, "alpha", dungeon_id)
     client.post(f"/game/player/{player_id}/hero", json={"hero_id": "mindweave_mage"})
 

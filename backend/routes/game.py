@@ -35,10 +35,25 @@ from services.ai_client import call_generate_question, call_judge_answer, call_n
 from services.heroes import (
     HEROES, DEFAULT_HERO_ID, POWERUP_MAX_USES_PER_WINDOW, POWERUP_WINDOW_HOURS, hero_or_default,
 )
+from services.monsters import monster_name_for
 
 router = APIRouter(prefix="/game", tags=["Game"])
 
 MAX_HINT_TOKENS = int(os.getenv("MAX_HINT_TOKENS", "3"))
+
+# Mirrors services/config.py's JUDGE_CORRECT_THRESHOLD/JUDGE_PARTIAL_THRESHOLD
+# defaults -- used here only to re-derive a verdict after Shadow Step's score
+# boost changes the score post-judging (see submit_answer).
+JUDGE_CORRECT_THRESHOLD = float(os.getenv("JUDGE_CORRECT_THRESHOLD", "0.65"))
+JUDGE_PARTIAL_THRESHOLD = float(os.getenv("JUDGE_PARTIAL_THRESHOLD", "0.30"))
+
+
+def _verdict_from_score(score: float) -> str:
+    if score >= JUDGE_CORRECT_THRESHOLD:
+        return "correct"
+    if score >= JUDGE_PARTIAL_THRESHOLD:
+        return "partial"
+    return "incorrect"
 
 
 # ─── Player Management ───
@@ -96,14 +111,15 @@ def _powerup_status(player: Player) -> dict:
     }
 
 
-def _room_correct_count(db: Session, player_id: str, topic: str) -> int:
-    """Correct-answer count for a topic's room -- the single source of truth
-    both room/enter and answer/submit use to drive the villain's HP bar, so
-    the bar and the actual room_cleared condition can never disagree."""
-    return db.query(AnswerSubmission).join(Question).filter(
-        AnswerSubmission.player_id == player_id, Question.topic == topic,
-        AnswerSubmission.verdict == "correct",
-    ).count()
+def _topic_damage_total(db: Session, player_id: str, topic: str) -> int:
+    """Cumulative damage dealt to a topic's boss -- read from the running
+    total on AccuracyHistory (updated every submit_answer), the single
+    source of truth both the in-fight HP bar and the room-clear/unlock-proof
+    checks use, so they can never disagree about whether the boss is dead."""
+    acc = db.query(AccuracyHistory).filter(
+        AccuracyHistory.player_id == player_id, AccuracyHistory.topic == topic,
+    ).first()
+    return acc.damage_dealt if acc and acc.damage_dealt else 0
 
 
 def _serialize_player(player: Player, histories: list[AccuracyHistory]) -> dict:
@@ -121,6 +137,7 @@ def _serialize_player(player: Player, histories: list[AccuracyHistory]) -> dict:
             {
                 "topic": h.topic, "attempts": h.attempts, "correct": h.correct,
                 "recent_accuracy": h.recent_accuracy, "mastered": h.mastered,
+                "damage_dealt": h.damage_dealt or 0,
             }
             for h in histories
         ],
@@ -174,15 +191,17 @@ async def use_powerup(body: dict, db: Session = Depends(get_db)):
 
     Every effect mutates server-authoritative state directly here (XP,
     hint_tokens, or a "pending" flag consumed by the next /answer/submit
-    call) -- including force_correct/force_correct_heal, which queue a
-    guaranteed-correct verdict for the player's next submission rather than
-    poking an arbitrary client-side HP number. This keeps the villain's HP
-    bar (hits_required/hits_landed, computed from real AnswerSubmission rows)
-    as the single source of truth, in sync with the real room-clear
-    condition. heal_to_full is the one exception: player HP during a fight
-    has no server-side pool at all (see enter_room's flat difficulty-based
-    enemy_hp for the enemy side's equivalent), so it's still returned as an
-    instruction for the frontend to apply to its own client-tracked HP.
+    call) -- including force_correct/force_correct_heal (forces the next
+    answer's score to a perfect 1.0, dealing that question's full max_damage)
+    and score_boost_next (adds a flat boost to the next answer's actual
+    score, potentially upgrading its verdict) -- rather than poking an
+    arbitrary client-side HP number. This keeps the villain's HP bar
+    (hits_required/hits_landed, computed from real cumulative damage) as the
+    single source of truth, in sync with the real room-clear condition.
+    heal_to_full is the one exception: player HP during a fight has no
+    server-side pool at all (see enter_room's boss_max_hp for the enemy
+    side's equivalent), so it's still returned as an instruction for the
+    frontend to apply to its own client-tracked HP.
     """
     player_id = body.get("player_id")
     question_id = body.get("question_id")
@@ -226,8 +245,9 @@ async def use_powerup(body: dict, db: Session = Depends(get_db)):
         response["heal_to_full"] = True
     elif effect == "double_xp_next":
         player.pending_xp_multiplier = 2.0
-    elif effect == "verdict_boost_next":
+    elif effect == "score_boost_next":
         player.pending_verdict_boost = True
+        response["queued"] = True
     elif effect == "free_hint_bonus_xp":
         if not question_id:
             raise HTTPException(status_code=422, detail="question_id is required for this powerup")
@@ -360,8 +380,17 @@ async def enter_room(body: RoomEnterRequest, db: Session = Depends(get_db)):
         difficulty = difficulty_data.get("difficulty", "medium")
         question_topic = room.topic
 
+    # The player fights whichever monster is actually shown on screen for
+    # this room (the boss fight always shows the final boss, even though its
+    # questions are drawn from a randomly-cycled sub-topic above) -- passing
+    # this into question generation keeps the AI in character as that one
+    # named villain instead of inventing a new monster persona per question.
+    monster_name = monster_name_for("boss" if room.is_boss else room.topic)
+
     try:
-        question_data = await call_generate_question(session.player_id, question_topic, difficulty, domain)
+        question_data = await call_generate_question(
+            session.player_id, question_topic, difficulty, domain, monster_name=monster_name,
+        )
     except httpx.HTTPError:
         raise HTTPException(status_code=503, detail="The question generator is unreachable. Try again.")
     question = Question(
@@ -369,18 +398,24 @@ async def enter_room(body: RoomEnterRequest, db: Session = Depends(get_db)):
         question_text=question_data.get("question", "Describe this concept."),
         expected_answer=question_data.get("expected_answer", ""),
         hint=question_data.get("hint", ""),
+        max_damage=question_data.get("max_damage", 80),
     )
     db.add(question)
     db.commit()
 
-    enemy_hp = {"easy": 50, "medium": 100, "hard": 150}.get(difficulty, 100)
-    hits_landed = min(room.enemy_count, _room_correct_count(db, session.player_id, room.topic))
+    # `room.enemy_count` is repurposed to store the boss's total HP pool
+    # (see db/seed.py) -- the name is a holdover from the old "N correct
+    # answers" design, kept to avoid a column rename, but it's damage points
+    # now, not a count of anything.
+    boss_max_hp = room.enemy_count
+    hits_landed = min(boss_max_hp, _topic_damage_total(db, session.player_id, room.topic))
     return RoomEnterResponse(
         room=room,
         question={"question_id": question.question_id, "question": question.question_text,
-                  "hint": question.hint, "topic": question.topic, "difficulty": question.difficulty},
-        enemy_hp=enemy_hp,
-        hits_required=room.enemy_count,
+                  "hint": question.hint, "topic": question.topic, "difficulty": question.difficulty,
+                  "max_damage": question.max_damage},
+        enemy_hp=boss_max_hp,
+        hits_required=boss_max_hp,
         hits_landed=hits_landed,
     )
 
@@ -416,19 +451,24 @@ async def submit_answer(body: AnswerSubmitRequest, db: Session = Depends(get_db)
     feedback = judge.get("feedback", "")
 
     # Consume a pending Titan's Smash/Valkyrie's Charge-style powerup: forces
-    # this answer to land as a correct critical hit outright, regardless of
-    # what the judge actually said. Checked before the Shadow Step boost
-    # since a forced correct is already the strongest possible outcome.
+    # this answer to a perfect (score 1.0) critical hit outright, regardless
+    # of what the judge actually said -- dealing this question's full
+    # max_damage. Checked before Shadow Step's boost since a forced perfect
+    # score is already the strongest possible outcome.
     if player.pending_force_correct:
         verdict = "correct"
+        score = 1.0
         damage_multiplier = 2.0
         player.pending_force_correct = False
-    # Consume a pending Shadow Step-style powerup: bumps this answer's verdict
-    # up one tier before anything else (XP, damage, accuracy history) is
-    # computed from it, so the whole rest of the pipeline sees the boosted
-    # verdict consistently.
+    # Consume a pending Shadow Step-style powerup: adds a flat boost to this
+    # answer's score (capped at a perfect 1.0), then re-derives the verdict
+    # from the boosted score -- can turn an incorrect answer partial, or a
+    # partial answer correct, rather than a flat tier-jump that ignored how
+    # close the original score actually was.
     elif player.pending_verdict_boost:
-        verdict = {"incorrect": "partial", "partial": "correct"}.get(verdict, verdict)
+        boost = hero_or_default(player.hero_id).get("boost", 0.3)
+        score = min(1.0, score + boost)
+        verdict = _verdict_from_score(score)
         damage_multiplier = {"correct": 2.0, "partial": 1.0, "incorrect": 0.0}[verdict]
         player.pending_verdict_boost = False
 
@@ -443,7 +483,12 @@ async def submit_answer(body: AnswerSubmitRequest, db: Session = Depends(get_db)
         xp_gained = int(xp_gained * player.pending_xp_multiplier)
         player.pending_xp_multiplier = 1.0
 
-    damage_dealt = calculate_damage(damage_multiplier, player.level)
+    # Damage scales continuously with the judge's actual score against this
+    # specific question's max_damage ceiling -- a perfect score deals full
+    # damage, a 0.7 deals 70% of it, and a harder question's higher ceiling
+    # always outdamages an easier one at the same score. Only "incorrect"
+    # deals zero; "partial" still chips in proportionally to its score.
+    damage_dealt = 0 if verdict == "incorrect" else calculate_damage(question.max_damage, score)
     original_level = player.level
     player.total_xp += xp_gained
     player.level = calculate_level(player.total_xp)
@@ -473,6 +518,7 @@ async def submit_answer(body: AnswerSubmitRequest, db: Session = Depends(get_db)
     acc.attempts = new_att
     acc.correct = new_cor
     acc.recent_accuracy = new_acc
+    acc.damage_dealt = (acc.damage_dealt or 0) + damage_dealt
     # One-way ratchet -- never unset once true. last_5_results is a rolling
     # window, so recent_accuracy can legitimately dip back below the unlock
     # threshold later; without this, a room the player already unlocked
@@ -484,7 +530,7 @@ async def submit_answer(body: AnswerSubmitRequest, db: Session = Depends(get_db)
     submission = AnswerSubmission(
         player_id=body.player_id, question_id=body.question_id,
         player_answer=body.player_answer, score=score, damage_multiplier=damage_multiplier,
-        verdict=verdict, response_time_ms=body.response_time_ms,
+        damage_dealt=damage_dealt, verdict=verdict, response_time_ms=body.response_time_ms,
     )
     db.add(submission)
     db.flush()
@@ -500,25 +546,25 @@ async def submit_answer(body: AnswerSubmitRequest, db: Session = Depends(get_db)
     if active_session and active_session.current_room_id:
         room = db.query(Room).filter(Room.room_id == active_session.current_room_id).first()
         if room:
-            correct_count = _room_correct_count(db, body.player_id, room.topic)
-            hits_required = room.enemy_count
-            hits_landed = min(room.enemy_count, correct_count)
-            room_cleared = check_room_clear(correct_count, room.enemy_count)
+            # `room.enemy_count` is repurposed to store the boss's total HP
+            # pool (see db/seed.py) -- damage points now, not a hit count.
+            boss_max_hp = room.enemy_count
+            topic_damage = _topic_damage_total(db, body.player_id, room.topic)
+            hits_required = boss_max_hp
+            hits_landed = min(boss_max_hp, topic_damage)
+            room_cleared = check_room_clear(topic_damage, boss_max_hp)
             if room_cleared:
-                # Check dungeon completion — all rooms cleared? One grouped
-                # query instead of one COUNT per room.
+                # Check dungeon completion — all rooms cleared? One query
+                # across every topic's running damage total instead of one
+                # per room.
                 all_rooms = db.query(Room).filter(Room.dungeon_id == active_session.dungeon_id).all()
-                correct_counts = dict(
-                    db.query(Question.topic, func.count(AnswerSubmission.submission_id))
-                    .join(AnswerSubmission, AnswerSubmission.question_id == Question.question_id)
-                    .filter(
-                        AnswerSubmission.player_id == body.player_id,
-                        AnswerSubmission.verdict == "correct",
-                    )
-                    .group_by(Question.topic)
-                    .all()
-                )
-                room_statuses = [(correct_counts.get(r.topic, 0), r.enemy_count) for r in all_rooms]
+                damage_by_topic = {
+                    h.topic: h.damage_dealt or 0
+                    for h in db.query(AccuracyHistory).filter(
+                        AccuracyHistory.player_id == body.player_id
+                    ).all()
+                }
+                room_statuses = [(damage_by_topic.get(r.topic, 0), r.enemy_count) for r in all_rooms]
 
                 dungeon_completed = check_dungeon_complete(room_statuses)
                 if dungeon_completed:
@@ -561,23 +607,24 @@ def _is_room_unlocked_for_player(
     # a later dip in the rolling recent_accuracy window can never re-lock a
     # room the player already legitimately opened.
     proven_by_accuracy = {h.topic for h in histories if h.mastered or h.recent_accuracy > 0.65}
-    correct_by_topic = {h.topic: h.correct for h in histories}
+    damage_by_topic = {h.topic: h.damage_dealt or 0 for h in histories}
 
     all_rooms = db.query(Room).filter(Room.dungeon_id == dungeon_id).all()
-    enemy_count_by_topic = {r.topic: r.enemy_count for r in all_rooms}
+    # `enemy_count` is repurposed to store each room's boss HP pool (see
+    # db/seed.py) -- damage points now, not a hit count.
+    boss_max_hp_by_topic = {r.topic: r.enemy_count for r in all_rooms}
 
     def is_proven(topic: str) -> bool:
         if topic in proven_by_accuracy:
             return True
-        # A player who actually clears a room (enough correct answers to
-        # reach its enemy_count) has earned the unlock regardless of what
+        # A player who actually clears a room (enough cumulative damage to
+        # drop its boss to 0 HP) has earned the unlock regardless of what
         # their rolling last-5 accuracy says -- recent_accuracy and "did I
-        # beat this room's villain" are different measures that can diverge
-        # (e.g. 3 correct out of 5 attempts clears a 3-hit room at only 60%
-        # rolling accuracy), and a cleared room should never stay a locked
-        # gate for downstream topics.
-        required = enemy_count_by_topic.get(topic)
-        return required is not None and required > 0 and correct_by_topic.get(topic, 0) >= required
+        # beat this room's villain" are different measures that can diverge,
+        # and a cleared room should never stay a locked gate for downstream
+        # topics just because of a rough patch mixed into that clear.
+        required = boss_max_hp_by_topic.get(topic)
+        return required is not None and required > 0 and damage_by_topic.get(topic, 0) >= required
 
     if room.is_boss:
         topic_rooms = [r for r in all_rooms if not r.is_boss]

@@ -53,6 +53,7 @@ class QuestionRequest(BaseModel):
     topic: str
     difficulty: Difficulty
     domain: str
+    monster_name: str | None = None
 
 
 class QuestionResponse(BaseModel):
@@ -60,6 +61,7 @@ class QuestionResponse(BaseModel):
     question: str
     expected_answer: str
     hint: str
+    max_damage: int
 
 
 # CALLED BY: Person 2's backend in POST /game/room/enter
@@ -71,7 +73,8 @@ async def question_generate(payload: QuestionRequest) -> QuestionResponse:
         raise HTTPException(status_code=422, detail=f"Unknown topic: {payload.topic!r}")
     try:
         result = await generate_question(
-            topic=payload.topic, difficulty=payload.difficulty, domain=payload.domain
+            topic=payload.topic, difficulty=payload.difficulty, domain=payload.domain,
+            monster_name=payload.monster_name,
         )
     except QuestionGenerationError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

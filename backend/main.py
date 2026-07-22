@@ -39,6 +39,13 @@ async def lifespan(app: FastAPI):
     ])
     ensure_columns("accuracy_history", [
         ("mastered", "BOOLEAN DEFAULT 0"),
+        ("damage_dealt", "INTEGER DEFAULT 0"),
+    ])
+    ensure_columns("submissions", [
+        ("damage_dealt", "INTEGER DEFAULT 0"),
+    ])
+    ensure_columns("questions", [
+        ("max_damage", "INTEGER DEFAULT 80"),
     ])
 
     # Auto-seed the demo dungeon

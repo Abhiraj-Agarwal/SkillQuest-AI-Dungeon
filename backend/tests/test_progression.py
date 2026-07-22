@@ -139,17 +139,18 @@ def test_unlock_does_not_regress_after_a_later_accuracy_dip():
 def test_clearing_a_room_unlocks_downstream_topics_even_at_low_accuracy():
     """Reported as 'I finished recursion but the dungeon still shows 60% and
     downstream rooms stayed locked.' recent_accuracy is a last-5-answers
-    rolling window, not a room-clear counter -- 3 correct out of 5 total
-    attempts clears a 3-hit room (the actual win condition) while sitting at
-    only 60% rolling accuracy, well under the 65% unlock threshold. A player
-    who beat the room's villain has earned the unlock regardless."""
+    rolling window, not the room-clear measure -- a player can deal enough
+    cumulative damage to drop recursion's boss (enemy_count, now its HP pool)
+    to 0 while sitting at only 60% rolling accuracy, well under the 65%
+    unlock threshold. A player who beat the room's villain has earned the
+    unlock regardless."""
     db, dungeon, alpha, _beta, rooms = build_world()
     try:
         assert rooms["recursion"].enemy_count == 3  # default from the Room model
 
         db.add(AccuracyHistory(
             player_id=alpha.player_id, topic="recursion",
-            correct=3, attempts=5, recent_accuracy=0.6,
+            damage_dealt=3, attempts=5, recent_accuracy=0.6,
         ))
         db.commit()
 

@@ -8,6 +8,7 @@ testable solo by passing these three strings ourselves).
 
 import asyncio
 import json
+import random
 import re
 import uuid
 
@@ -18,6 +19,17 @@ import config
 
 MIN_EXPECTED_ANSWER_LENGTH = 30
 MAX_ATTEMPTS = 3
+
+# Damage this question deals if answered perfectly (NLP score of 1.0).
+# Randomized within a per-difficulty band rather than a fixed value per tier,
+# so two "hard" questions aren't interchangeable -- a harder question always
+# has a *higher ceiling* than an easier one, but exactly how much is still
+# some variety within that.
+DAMAGE_RANGE_BY_DIFFICULTY = {
+    "easy": (40, 70),
+    "medium": (70, 110),
+    "hard": (110, 160),
+}
 
 _client = None
 
@@ -32,12 +44,14 @@ def _get_client():
         _client = genai.Client(api_key=config.GEMINI_API_KEY)
     return _client
 
-PROMPT_TEMPLATE = """You are a dungeon monster in an educational RPG.
+PROMPT_TEMPLATE = """You are {monster_name}, a dungeon monster in an educational RPG.
 Topic: {topic}
 Difficulty: {difficulty}
 Subject domain: {domain}
 
-Generate a single exam-quality question for a student fighting you.
+Generate a single exam-quality question for a student fighting you. Stay in
+character as {monster_name} throughout the question text -- do not invent,
+name, or reference any other monster or creature.
 "expected_answer" is compared against the student's free-text answer by a
 semantic similarity judge, so it must be a full explanatory answer (at least
 2-3 sentences) that states the fact AND explains the reasoning behind it --
@@ -71,7 +85,7 @@ def _extract_json(raw_text: str) -> dict:
     return json.loads(text)
 
 
-async def generate_question(topic: str, difficulty: str, domain: str) -> dict:
+async def generate_question(topic: str, difficulty: str, domain: str, monster_name: str = None) -> dict:
     """
     Generate a single unique question for a fight.
 
@@ -81,19 +95,27 @@ async def generate_question(topic: str, difficulty: str, domain: str) -> dict:
             validate that itself; routes/ai.py is responsible for that.
         difficulty: str -- "easy" | "medium" | "hard".
         domain: str -- subject domain, e.g. "Data Structures & Algorithms".
+        monster_name: str -- the topic's actual villain name (see
+            services/monsters.py on the P2 side), so every question for a
+            topic is voiced consistently by the one monster the player sees
+            on screen instead of a different invented persona each time.
+            Falls back to a generic phrase if not supplied.
 
     Output:
         dict matching the POST /ai/question/generate response contract:
-        { question_id, question, expected_answer, hint }
+        { question_id, question, expected_answer, hint, max_damage }
 
-    P2 dependency: NONE. All three inputs are supplied directly by the
-    caller. Fully testable solo (see tests/test_llm_engine.py).
+    P2 dependency: NONE. All inputs are supplied directly by the caller.
+    Fully testable solo (see tests/test_llm_engine.py).
 
     Raises:
         QuestionGenerationError if the LLM fails to return valid JSON with
         a sufficiently detailed expected_answer after MAX_ATTEMPTS retries.
     """
-    prompt = PROMPT_TEMPLATE.format(topic=topic, difficulty=difficulty, domain=domain)
+    prompt = PROMPT_TEMPLATE.format(
+        topic=topic, difficulty=difficulty, domain=domain,
+        monster_name=monster_name or "the dungeon's guardian",
+    )
     client = _get_client()
 
     last_error: Exception | None = None
@@ -131,11 +153,13 @@ async def generate_question(topic: str, difficulty: str, domain: str) -> dict:
                     f"NLP judge needs >= {MIN_EXPECTED_ANSWER_LENGTH} chars to score against"
                 )
 
+            damage_low, damage_high = DAMAGE_RANGE_BY_DIFFICULTY.get(difficulty, (70, 110))
             return {
                 "question_id": str(uuid.uuid4()),
                 "question": question,
                 "expected_answer": expected_answer,
                 "hint": hint,
+                "max_damage": random.randint(damage_low, damage_high),
             }
         except (json.JSONDecodeError, KeyError, ValueError) as exc:
             last_error = exc

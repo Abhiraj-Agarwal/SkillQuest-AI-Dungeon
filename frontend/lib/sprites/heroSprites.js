@@ -18,7 +18,7 @@ export const HEROES = {
     name: 'Titan Warrick',
     gender: 'male',
     powerupName: "Titan's Smash",
-    powerupDescription: 'Empowers your next answer to land as a guaranteed critical hit.',
+    powerupDescription: 'Empowers your next answer to deal full damage, as if answered perfectly.',
     effect: 'force_correct',
     image: '/sprites/heroes/titan_warrior.png',
     palette: { k: '#0c0a14', p: '#c43d3d', m: '#8a8f98', d: '#5a5f68', s: '#e8b389', e: '#ece3cf' },
@@ -74,8 +74,9 @@ export const HEROES = {
     name: 'Kael Shadowstep',
     gender: 'male',
     powerupName: 'Shadow Step',
-    powerupDescription: 'Your next imperfect answer is upgraded one tier.',
-    effect: 'verdict_boost_next',
+    powerupDescription: "Boosts your next answer's judged score by 30% (capped at a perfect score) -- can turn an incorrect or partial answer into a real hit.",
+    effect: 'score_boost_next',
+    boost: 0.3,
     image: '/sprites/heroes/shadow_rogue.png',
     palette: { k: '#0c0a14', h: '#2a2438', c: '#18140f', d: '#443d34', s: '#e8b389', e: '#6ee7d0' },
     grid: [
@@ -102,7 +103,7 @@ export const HEROES = {
     name: 'Freya Ironheart',
     gender: 'female',
     powerupName: "Valkyrie's Charge",
-    powerupDescription: 'Guarantees your next answer lands as a critical hit and heals you to full HP.',
+    powerupDescription: 'Guarantees your next answer deals full damage and heals you to full HP.',
     effect: 'force_correct_heal',
     image: '/sprites/heroes/valkyrie_warrior.png',
     palette: { k: '#0c0a14', g: '#e8b339', m: '#8a8f98', s: '#e8b389', e: '#ece3cf', y: '#e8b339' },
@@ -188,4 +189,14 @@ export const DEFAULT_HERO_ID = 'titan_warrior';
 
 export function heroOrDefault(heroId) {
   return HEROES[heroId] || HEROES[DEFAULT_HERO_ID];
+}
+
+// Combat/boss pages show this line when a "queued" powerup (one that alters
+// the *next* answer rather than firing immediately) is armed. Kael's boost
+// is a partial score bump, not a guaranteed full hit, so it needs its own
+// wording -- reusing the force_correct copy for him would overpromise.
+export function queuedPowerupText(heroId) {
+  const effect = heroOrDefault(heroId).effect;
+  if (effect === 'score_boost_next') return 'Your next answer gets a +30% score boost.';
+  return 'Your next answer deals full damage, as if answered perfectly.';
 }

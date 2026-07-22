@@ -12,7 +12,7 @@ HEROES = {
         "name": "Titan Warrick",
         "gender": "male",
         "powerup_name": "Titan's Smash",
-        "powerup_description": "Empowers your next answer to land as a guaranteed critical hit.",
+        "powerup_description": "Empowers your next answer to deal full damage, as if answered perfectly.",
         "effect": "force_correct",
     },
     "sage_mage": {
@@ -26,14 +26,15 @@ HEROES = {
         "name": "Kael Shadowstep",
         "gender": "male",
         "powerup_name": "Shadow Step",
-        "powerup_description": "Your next imperfect answer is upgraded one tier (incorrect -> partial, partial -> correct).",
-        "effect": "verdict_boost_next",
+        "powerup_description": "Boosts your next answer's judged score by 30% (capped at a perfect score) -- can turn an incorrect or partial answer into a real hit.",
+        "effect": "score_boost_next",
+        "boost": 0.3,
     },
     "valkyrie_warrior": {
         "name": "Freya Ironheart",
         "gender": "female",
         "powerup_name": "Valkyrie's Charge",
-        "powerup_description": "Guarantees your next answer lands as a critical hit and heals you to full HP.",
+        "powerup_description": "Guarantees your next answer deals full damage and heals you to full HP.",
         "effect": "force_correct_heal",
     },
     "mindweave_mage": {
