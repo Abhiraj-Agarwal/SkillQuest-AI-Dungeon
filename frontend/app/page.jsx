@@ -23,14 +23,15 @@ export default function LandingPage() {
           'repeating-linear-gradient(0deg, #15101f 0 2px, transparent 2px 32px), repeating-linear-gradient(90deg, #15101f 0 2px, transparent 2px 32px)',
       }}
     >
-      <div>
+      <div className="w-full">
         <PixelBadge tone="arcane" className="mb-4">DATA STRUCTURES & ALGORITHMS</PixelBadge>
         {/* eslint-disable-next-line @next/next/no-img-element -- fixed local
             asset, not a candidate for next/image's remote optimization pipeline */}
         <img
           src="/sprites/bats/logo.png"
-          alt="CodeCrypt: The AI Dungeon"
-          style={{ imageRendering: 'pixelated', maxWidth: '100%', height: 'auto' }}
+          alt="SkillQuest: The AI Dungeon"
+          className="mx-auto"
+          style={{ imageRendering: 'pixelated', maxWidth: '45%', height: 'auto' }}
         />
       </div>
 

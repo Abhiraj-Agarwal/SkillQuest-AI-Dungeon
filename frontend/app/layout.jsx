@@ -21,7 +21,7 @@ const vt323 = VT323({
 });
 
 export const metadata = {
-  title: 'CodeCrypt: The AI Dungeon',
+  title: 'SkillQuest: The AI Dungeon',
   description: 'An adaptive learning RPG where your real knowledge powers your character.',
 };
 

@@ -1,10 +1,10 @@
-# CodeCrypt art prompt (for ChatGPT image generation)
+# SkillQuest art prompt (for ChatGPT image generation)
 
 Copy everything below into ChatGPT.
 
 ---
 
-I'm building a pixel-art dungeon-crawler web game called **CodeCrypt: The AI Dungeon** (a DSA-learning RPG). Right now all art is hand-coded pixel grids rendered as inline SVG (no image files at all) — 16x16 color-index grids against a small hex palette. I want to replace/supplement these with real generated sprite art to raise the visual quality.
+I'm building a pixel-art dungeon-crawler web game called **SkillQuest: The AI Dungeon** (a DSA-learning RPG). Right now all art is hand-coded pixel grids rendered as inline SVG (no image files at all) — 16x16 color-index grids against a small hex palette. I want to replace/supplement these with real generated sprite art to raise the visual quality.
 
 ## Style guide
 
