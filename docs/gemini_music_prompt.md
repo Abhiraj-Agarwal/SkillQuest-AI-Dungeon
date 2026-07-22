@@ -1,10 +1,10 @@
-# Gemini prompt — background music for CodeCrypt: The AI Dungeon
+# Gemini prompt — background music for SkillQuest: The AI Dungeon
 
 Copy everything below into Gemini (or whichever audio-generation tool you're using it through).
 
 ---
 
-I'm building a pixel-art dungeon-crawler learning game called **CodeCrypt: The AI Dungeon** — a data-structures-and-algorithms RPG where you fight topic-themed monsters by answering real questions correctly. The whole visual identity is a damp, torch-lit cave: near-black stone, rusted iron chains, ember-orange torchlight, teal arcane glow, occasional bats swooping through. I need background music that matches that world.
+I'm building a pixel-art dungeon-crawler learning game called **SkillQuest: The AI Dungeon** — a data-structures-and-algorithms RPG where you fight topic-themed monsters by answering real questions correctly. The whole visual identity is a damp, torch-lit cave: near-black stone, rusted iron chains, ember-orange torchlight, teal arcane glow, occasional bats swooping through. I need background music that matches that world.
 
 ## Overall mood
 

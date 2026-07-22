@@ -9,7 +9,7 @@ import PixelButton from './ui/PixelButton';
 const SLIDES = [
   {
     title: 'WELCOME TO THE DUNGEON',
-    body: "CodeCrypt turns learning Data Structures & Algorithms into a dungeon crawl. Your real knowledge is your character sheet — the dungeon routes its monsters straight at whatever topic you're weakest in.",
+    body: "SkillQuest turns learning Data Structures & Algorithms into a dungeon crawl. Your real knowledge is your character sheet — the dungeon routes its monsters straight at whatever topic you're weakest in.",
   },
   {
     title: 'ONE VILLAIN PER TOPIC',
