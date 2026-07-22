@@ -268,7 +268,8 @@ async def dashboard(player_id: str):
         score_history = [
             {"score": s.score, "verdict": s.verdict, "topic": q.topic,
              "difficulty": q.difficulty, "response_time_ms": s.response_time_ms,
-             "submitted_at": s.submitted_at.isoformat() if s.submitted_at else None}
+             "submitted_at": s.submitted_at.isoformat() if s.submitted_at else None,
+             "question": q.question_text, "player_answer": s.player_answer}
             for s, q in submissions
         ]
 
